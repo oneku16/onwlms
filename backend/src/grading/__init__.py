@@ -1,0 +1,37 @@
+"""Explicit public contracts for the official grading bounded context."""
+
+from grading.application import GRADING_CLOSED_TERM_REVISE
+from grading.application import GRADING_FINAL_RECORD
+from grading.application import GRADING_FINAL_REVISE
+from grading.application import GRADING_SCALE_MANAGE
+from grading.application import GRADING_TRANSCRIPT_READ
+from grading.application import GradeTargetDirectory
+from grading.application import GradingRepository
+from grading.application import OfficialGradingService
+from grading.application import TermClosureDirectory
+from grading.domain import FinalGrade
+from grading.domain import GpaSummary
+from grading.domain import GradeRevision
+from grading.domain import GradeTarget
+from grading.domain import GradingScale
+from grading.domain import GradingScaleTemplate
+from grading.domain import TranscriptRecord
+
+__all__ = [
+    "GRADING_CLOSED_TERM_REVISE",
+    "GRADING_FINAL_RECORD",
+    "GRADING_FINAL_REVISE",
+    "GRADING_SCALE_MANAGE",
+    "GRADING_TRANSCRIPT_READ",
+    "FinalGrade",
+    "GpaSummary",
+    "GradeRevision",
+    "GradeTarget",
+    "GradeTargetDirectory",
+    "GradingRepository",
+    "GradingScale",
+    "GradingScaleTemplate",
+    "OfficialGradingService",
+    "TermClosureDirectory",
+    "TranscriptRecord",
+]

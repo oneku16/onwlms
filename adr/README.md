@@ -61,6 +61,12 @@ Among ADR statuses, only Accepted records are authoritative and constrain implem
 | ADR | Status | Decision |
 | --- | --- | --- |
 | [ADR-0001](ADR-0001-modular-monolith.md) | Accepted | Adopt a modular monolith for the OwnSIS core instead of microservices |
+| [ADR-0002](ADR-0002-postgresql-tenant-enforcement.md) | Proposed | Backstop explicit tenant context with PostgreSQL row-level security |
+| [ADR-0003](ADR-0003-postgresql-server-sessions.md) | Proposed | Store encrypted browser-session material in PostgreSQL |
+| [ADR-0004](ADR-0004-transactional-outbox-worker.md) | Proposed | Run reliable background work from a PostgreSQL transactional outbox |
+| [ADR-0005](ADR-0005-openapi-frontend-contracts.md) | Proposed | Generate frontend API types from versioned OpenAPI |
+| [ADR-0006](ADR-0006-deterministic-scheduling-heuristic.md) | Proposed | Use a deterministic, explainable first scheduling heuristic |
+| [ADR-0007](ADR-0007-resumable-admissions-enrollment.md) | Proposed | Convert accepted applicants through resumable module-owned registrations |
 
 ## Assumptions
 

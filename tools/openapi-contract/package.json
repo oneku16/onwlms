@@ -1,0 +1,16 @@
+{
+  "name": "@ownsis/openapi-contract-tooling",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated, reproducible OpenAPI-to-TypeScript generator",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  },
+  "dependencies": {
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3"
+  }
+}

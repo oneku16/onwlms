@@ -2,13 +2,24 @@
 
 ## Purpose
 
-This roadmap defines the ordered engineering outcomes required to turn the OwnSIS foundation into a sustainable production platform. It is organized by evidence-based gates rather than dates or feature volume. A gate is complete only when its exit evidence is reviewable and the resulting capability can be maintained by the project.
+This roadmap defines the ordered engineering outcomes required to move the
+current OwnSIS first-release implementation toward a sustainable production
+platform. It is organized by evidence-based gates rather than dates or feature
+volume. A gate is complete only when its exit evidence is reviewable and the
+resulting capability can be maintained by the project.
 
 ## Scope
 
-The roadmap covers engineering governance, platform construction, tenant and identity trust boundaries, modular domain delivery, integration readiness, production operations, and long-term open-source stewardship.
+The roadmap covers engineering governance, platform construction, tenant and
+identity trust boundaries, modular domain delivery, integration readiness,
+production operations, and long-term open-source stewardship. Its current-state
+snapshot classifies implementation evidence without converting it into gate
+acceptance.
 
-It does not schedule education workflows, commit to release dates, define APIs or database schemas, or rank institution-specific feature requests. Domain capabilities enter the delivery stream only after discovery establishes their language, ownership, invariants, and acceptance evidence.
+It does not schedule education workflows, commit to release dates, duplicate the
+versioned API/schema contracts, or rank institution-specific feature requests.
+Domain capabilities continue to require validated language, ownership,
+invariants, and acceptance evidence even when a reversible implementation exists.
 
 ## Roadmap Rules
 
@@ -19,6 +30,44 @@ It does not schedule education workflows, commit to release dates, define APIs o
 - Architecture grows from validated needs. Distributed services, generic extension systems, and broad abstractions do not enter the roadmap without evidence and an accepted ADR.
 - Every gate leaves the repository, documentation, and verification workflows in a coherent state.
 - Production promotion requires satisfaction of all applicable earlier gates, even when implementation work overlaps.
+
+## Current First-Release Evidence Snapshot
+
+This snapshot describes the repository state, not a release certification. The
+classifications mean:
+
+- **Implemented:** executable code and automated repository evidence exist for a
+  bounded local or controlled use case.
+- **Partial:** a real capability exists, but important user, operational,
+  compatibility, recovery, or governance evidence is incomplete.
+- **Credential-gated:** the boundary has production-shaped code or contracts, but
+  verification against the real external system requires secrets, tenants, and a
+  controlled environment not stored in this repository.
+- **Deferred:** the capability is intentionally unavailable or remains a contract
+  only; no caller may present it as working behavior.
+
+| Area | Classification | Current evidence and remaining gate |
+| --- | --- | --- |
+| Repository foundation and modular monolith | Implemented, governance partial | Project requirements, module boundaries, architecture tests, engineering workflows, and ADR-0001 are present. ADR-0002 through ADR-0007 remain Proposed and must not be treated as accepted production decisions. |
+| Reproducible local engineering system | Implemented locally, partial as a gate | Locked Python/npm dependencies, Docker services, Alembic, OpenAPI generation, linting, strict typing, tests, dependency audits, and runtime image builds are automated. Independent clean-environment reproduction, artifact provenance, supported-upgrade matrices, and exercised recovery remain gate evidence. |
+| Tenant and identity boundary | Implemented with controlled tests, credential-gated | Exact tenant actor context, active memberships, permissions, PostgreSQL tenant policies, negative tests, encrypted server sessions, and OwnID OIDC relying-party behavior exist. Real OwnID issuer/JWKS/refresh/revocation/logout compatibility and deployment-specific security review require provider credentials and controlled tests. |
+| Core domain modules | Implemented vertical slices, partial product coverage | Organizations, People, Entitlements, Academics, Admissions, Grading, Scheduling, Audit, Outbox, Provisioning, Notifications, Integrations, self-service reads, and resumable accepted-applicant conversion have real application and persistence paths. Some portal pages remain read-only or explicitly unavailable, and the complete critical journey still requires controlled end-to-end and institutional-policy evidence. |
+| Scheduling | Implemented bounded heuristic, partial | Manual scheduling, constraints, versioning, locked sessions, deterministic proposal generation, and tests exist. The heuristic is not represented as a production-grade optimizer; load, quality, and institution-specific policy validation remain open. |
+| Moodle | Partial and credential-gated | Tenant configuration, encrypted tokens, mappings, supported REST calls, provisioning seams, duplicate-safe grade evidence/status, and mapped-user deadline reads exist. Deadline results are bounded live evidence from the mapped user's enrolled courses, with observation time and source version; there is no persisted deadline cache. Authenticated grade-event ingress, selected-term reconciliation, grade-scale/course-enrollment mapping, retries/quarantine, and official-grade acceptance are not implemented. Real Moodle version, permission, outage, and throttling exercises also require a controlled instance. |
+| MCP | Implemented read-only foundation, credential-gated | OwnID RS256 verification, bounded JWKS caching, scope checks, per-invocation membership/permission/resource/tenant/entitlement validation, minimum-data tools, and audit evidence exist. Real OwnID-issued MCP tokens, client compatibility, provider retention/region review, and adversarial evaluation remain gated. |
+| Notifications and provisioning | Partial | In-app notification state, preferences, retries, persistent provisioning jobs, bounded attempts/leases, local recording adapters, and explicit unavailable production adapters exist. Real external notification, OwnID provisioning, Moodle provisioning, and Microsoft 365 adapters are not implemented for production; credentials alone cannot enable them. |
+| Frontend experience | Partial | The Next.js shell, organization context, role/permission/entitlement navigation, several administrative actions, connected self-service reads, and explicit unavailable states exist. Comprehensive workflow UX, accessibility, localization, browser compatibility, and end-to-end coverage remain incomplete. |
+| Production operation | Deferred as a gate | Health/readiness, structured diagnostics, containers, and recovery guidance are foundations only. Service objectives, monitoring/alerts, managed hosting, backup restore, incident exercises, privacy lifecycle, load/noisy-tenant tests, penetration review, release/rollback, and on-call ownership are not proven. |
+| Deferred product areas | Deferred | Attendance, Finance/payment balances, HR, Library, Dormitory, advanced analytics, production-grade optimizer selection, object storage, custom-domain automation, and destructive data-lifecycle policy remain outside the working release. |
+
+### Gate Assessment
+
+No gate is declared complete by this document. Current evidence places Gates 0
+through 4 in partial progress: their implementation foundations exist, but their
+exit conditions still require governance, independent reproduction, provider,
+or operational proof. Gates 5 and 6 are not met. Gate 7 supplies useful practices
+now but cannot be evidenced as routine continuous evolution before supported
+releases exist.
 
 ## Gate 0 — Foundation Is Authoritative
 
