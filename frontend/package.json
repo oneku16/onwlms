@@ -8,7 +8,7 @@
     "build": "npm run typecheck && next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "generate:api": "../scripts/generate_openapi_types.sh",
