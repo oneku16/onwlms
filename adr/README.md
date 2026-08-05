@@ -43,7 +43,7 @@ Accepted records are historical artifacts. Corrections that do not change meanin
 - **Superseded**: replaced by a newer ADR, which must be linked.
 - **Deprecated**: retained for history but no longer recommended for new work.
 
-Only accepted ADRs constrain implementation. A proposed record cannot be used to bypass review.
+Among ADR statuses, only Accepted records are authoritative and constrain implementation. A Proposed record cannot be used to bypass review.
 
 ## Decision Process
 

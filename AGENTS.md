@@ -71,6 +71,7 @@ Agents advise and implement within scope; they do not silently become product ow
 - Design for testability and observability without exposing internals solely for tests.
 - Comments explain rationale, constraints, and non-obvious tradeoffs; they do not narrate syntax.
 - Follow `docs/08_CODING_STANDARD.md` for language-independent and stack-specific standards.
+- Before changing Python backend code, read [`docs/13_BACKEND_ENGINEERING_GUIDE.md`](docs/13_BACKEND_ENGINEERING_GUIDE.md) in full and follow it as the backend implementation and engineering standard.
 
 ## Forbidden Actions
 

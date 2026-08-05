@@ -8,7 +8,7 @@ This document provides the day-to-day operating protocol for AI-assisted work on
 
 These rules apply to analysis, documentation, implementation, review, testing, repository maintenance, and external-tool use performed by an AI agent. They do not grant permission to modify the repository. Write authority must come from an explicit user request, and external side effects require authorization appropriate to their impact.
 
-The root `AGENTS.md` is authoritative for repository-wide constraints. A closer `AGENTS.md` may add local constraints. If instructions conflict or their precedence is unclear, the agent must stop and surface the conflict.
+System instructions and direct human instructions take precedence over repository documentation. Within repository documentation, the root `AGENTS.md` governs agent behavior; a closer `AGENTS.md` may add local constraints. If instructions conflict or their precedence is unclear, the agent must stop and surface the conflict.
 
 ## Responsibilities
 
@@ -22,7 +22,7 @@ Before proposing or changing anything, inspect:
 
 - the user's exact request and acceptance criteria;
 - the root and nearest applicable agent instructions;
-- relevant project, architecture, domain, integration, security, and coding documents;
+- relevant project, architecture, domain, integration, security, and coding documents, including [`13_BACKEND_ENGINEERING_GUIDE.md`](13_BACKEND_ENGINEERING_GUIDE.md) before Python backend changes;
 - accepted ADRs that govern the affected area;
 - nearby source and tests for established patterns;
 - current working-tree changes that could overlap the task.
@@ -143,4 +143,3 @@ If no actionable findings are discovered, say so and identify the inspection or 
 ## Future Evolution
 
 These operating rules will be refined as CI, module ownership, release controls, data governance, and automated agent checks become concrete. Future revisions may encode risk tiers and required verification matrices. They must remain consistent with the root `AGENTS.md`, preserve explicit human authorization, and be reviewed as governance changes rather than ordinary editorial cleanup.
-

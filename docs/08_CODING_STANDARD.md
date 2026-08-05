@@ -8,6 +8,8 @@ This document defines the engineering standards for source code and code-adjacen
 
 The standard applies to Python, TypeScript, SQL migrations, configuration, tests, automation, and documentation that accompanies implementation. It governs how code is structured and assessed; it does not define business capabilities, public APIs, database schemas, or module contents.
 
+[`13_BACKEND_ENGINEERING_GUIDE.md`](13_BACKEND_ENGINEERING_GUIDE.md) is the authoritative specialization for Python backend implementation and engineering conventions. This document remains the repository-wide coding baseline; the backend engineering guide elaborates it without redefining accepted architectural decisions or system-level boundaries.
+
 Repository-enforced formatter, linter, type-checker, build, and test configurations are the executable expression of this standard. Changing a platform-wide quality rule is a deliberate repository change and may require an ADR when it affects architecture or long-term maintainability.
 
 ## Responsibilities
@@ -79,7 +81,7 @@ Shorter code is not inherently better. A design is preferred when a future maint
 - Python 3.14 language semantics are the baseline; compatibility workarounds for unsupported Python versions are not introduced.
 - All application-facing interfaces and non-trivial functions use precise type annotations. Broad dynamic types require a narrow, documented boundary and runtime validation.
 - Imports are explicit and do not rely on wildcard behavior or import-time side effects.
-- Mutable state is owned and scoped. Mutable default arguments, ambient singletons, and implicit shared caches are prohibited.
+- Mutable state is owned and scoped. Mutable default arguments, mutable or service-locator singletons, and implicit shared caches are prohibited. An immutable, validated settings instance may be exposed solely for composition-root use as defined by the backend engineering guide.
 - Data structures communicate intent. Domain behavior is not reduced to unvalidated dictionaries or loosely shaped payloads.
 - Asynchronous code is used for actual concurrency needs, not as a blanket convention. Blocking operations must not run unnoticed on an asynchronous execution path.
 - Resource ownership is explicit, and resources are released deterministically.
@@ -171,11 +173,10 @@ Shorter code is not inherently better. A design is preferred when a future maint
 ## Assumptions
 
 - OwnSIS is a greenfield Python 3.14 and strict TypeScript system with no requirement to retain legacy code conventions.
-- The modular monolith and DDD boundaries described by accepted architecture documents govern code organization.
+- Accepted ADRs and the system-level boundaries in `03_ARCHITECTURE.md` govern code organization.
 - Repository automation will progressively encode mechanical portions of this standard.
 - Security, identity, tenancy, and data ownership requirements apply consistently across synchronous, asynchronous, administrative, and AI-assisted paths.
 
 ## Future Evolution
 
 This standard will become more specific as real domain modules and operational constraints emerge. Language versions, automated quality gates, performance budgets, compatibility policies, and test layers may be refined through reviewed changes. Refinements must preserve the core priorities, avoid retroactive exceptions for convenience, and use ADRs when they alter architecture or platform-wide engineering policy.
-

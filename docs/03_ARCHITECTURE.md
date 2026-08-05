@@ -2,13 +2,15 @@
 
 ## Purpose
 
-This document defines the structural architecture of OwnSIS and the constraints that preserve it as the platform evolves. It establishes the system boundary, runtime shape, dependency direction, consistency model, tenancy model, and deployment principles. It is normative for architectural decisions; more detailed choices must remain compatible with it or be changed through an Architecture Decision Record (ADR).
+This document defines the structural architecture of OwnSIS and the constraints that preserve it as the platform evolves. It establishes the system boundary, runtime shape, dependency direction, consistency model, tenancy model, and deployment principles. This document governs OwnSIS system-level boundaries. Accepted Architecture Decision Records govern accepted architectural decisions; detailed choices and implementation guidance must remain compatible with both.
 
 ## Scope
 
 This document covers the OwnSIS web application, backend application, background processing, persistence, internal events, and integration boundaries. It also describes the architectural relationship with OwnID, Moodle, and Model Context Protocol (MCP) capabilities.
 
 It does not define HTTP endpoints, database tables, payload schemas, user journeys, or detailed business rules. Domain language and module boundaries are developed in `04_DOMAIN_MODEL.md` and `05_MODULES.md`; integration and security constraints are expanded in their dedicated documents.
+
+Detailed Python backend implementation and engineering conventions are governed by [`13_BACKEND_ENGINEERING_GUIDE.md`](13_BACKEND_ENGINEERING_GUIDE.md); that guide implements rather than redefines these system-level boundaries.
 
 ## Responsibilities
 
