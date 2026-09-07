@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC
 from datetime import date
 from datetime import datetime
@@ -17,6 +18,7 @@ from academics.application.service import ACADEMICS_SELECTION_OVERRIDE
 from academics.application.service import ACADEMICS_SELECTION_SUBMIT
 from academics.application.service import CourseSelectionService
 from academics.domain.exceptions import AcademicRuleError
+from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
 from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
@@ -61,13 +63,19 @@ class RecordedSelectionAuditEvent:
     actor_subject_id: UUID
     request_id: UUID
     correlation_id: str
+    outcome: str
 
 
 class RecordingCourseSelectionAuditSink:
     """Capture minimized administrative selection evidence."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_actions: set[str] | None = None,
+    ) -> None:
         self.events: list[RecordedSelectionAuditEvent] = []
+        self.fail_on_actions = set(fail_on_actions or set())
 
     async def record_course_selection_event(
         self,
@@ -77,7 +85,10 @@ class RecordingCourseSelectionAuditSink:
         actor_subject_id: UUID,
         request_id: UUID,
         correlation_id: str,
+        outcome: str,
     ) -> None:
+        if action in self.fail_on_actions:
+            raise RuntimeError("Course-selection audit is unavailable.")
         self.events.append(
             RecordedSelectionAuditEvent(
                 action=action,
@@ -85,6 +96,7 @@ class RecordingCourseSelectionAuditSink:
                 actor_subject_id=actor_subject_id,
                 request_id=request_id,
                 correlation_id=correlation_id,
+                outcome=outcome,
             )
         )
 
@@ -95,6 +107,20 @@ class FakeCourseSelectionStudentOwnership:
     def __init__(self) -> None:
         self.owned_profile_by_subject: dict[UUID, UUID] = {}
         self.checks: list[tuple[UUID, UUID]] = []
+        self.resolve_checks: list[tuple[UUID, UUID]] = []
+
+    async def resolve_actor_student_profile_id(
+        self,
+        *,
+        actor: TenantActorContext,
+    ) -> UUID:
+        """Resolve an explicitly registered student profile for context reads."""
+
+        self.resolve_checks.append((actor.organization_id, actor.subject_id))
+        profile_id = self.owned_profile_by_subject.get(actor.subject_id)
+        if profile_id is None:
+            raise NotFoundError("Owned student profile was not found.")
+        return profile_id
 
     async def actor_owns_student_profile(
         self,
@@ -167,11 +193,12 @@ async def _selection_fixture(
     *,
     approval_required: bool = True,
     capacity: int = 10,
+    audit: RecordingCourseSelectionAuditSink | None = None,
 ) -> SelectionFixture:
     organization_id = uuid4()
     campus_id = uuid4()
     repository = InMemoryAcademicRepository()
-    audit = RecordingCourseSelectionAuditSink()
+    audit = audit or RecordingCourseSelectionAuditSink()
     ownership = FakeCourseSelectionStudentOwnership()
     now = datetime(2026, 8, 5, 8, tzinfo=UTC)
     faculty = Faculty(
@@ -363,7 +390,12 @@ async def test_selection_requires_permissioned_audited_override() -> None:
         SelectionRuleCode.PREREQUISITE_MISSING
     )
     assert [event.action for event in fixture.audit.events] == [
-        "academics.course_selection.override_applied"
+        "academics.course_selection.override_requested",
+        "academics.course_selection.override_applied",
+    ]
+    assert [event.outcome for event in fixture.audit.events] == [
+        "intent_recorded",
+        "succeeded",
     ]
     assert fixture.audit.events[0].request_id == request.id
 
@@ -381,6 +413,149 @@ async def test_listing_selection_requests_requires_approval_permission() -> None
             limit=50,
             offset=0,
         )
+
+
+async def test_student_context_returns_only_exact_owned_selectable_state() -> None:
+    fixture = await _selection_fixture()
+    student = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    fixture.ownership.owned_profile_by_subject[student.subject_id] = (
+        fixture.enrollment.student_id
+    )
+
+    context = await fixture.service.student_context(context=student)
+
+    assert context.student_profile_id == fixture.enrollment.student_id
+    assert len(context.enrollments) == 1
+    enrollment = context.enrollments[0]
+    assert enrollment.id == fixture.enrollment.id
+    assert enrollment.program_name == "Computer Science"
+    assert len(enrollment.terms) == 1
+    assert enrollment.terms[0].id == fixture.term.id
+    assert {value.id for value in enrollment.terms[0].offerings} == {
+        fixture.first_offering.id,
+        fixture.second_offering.id,
+    }
+    assert {value.course_code for value in enrollment.terms[0].offerings} == {
+        "CS101",
+        "CS201",
+    }
+    assert fixture.ownership.resolve_checks == [
+        (fixture.organization_id, student.subject_id)
+    ]
+
+
+async def test_student_context_excludes_closed_terms() -> None:
+    fixture = await _selection_fixture()
+    student = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    fixture.ownership.owned_profile_by_subject[student.subject_id] = (
+        fixture.enrollment.student_id
+    )
+    await fixture.repository.save_term(fixture.term.close())
+
+    context = await fixture.service.student_context(context=student)
+
+    assert len(context.enrollments) == 1
+    assert context.enrollments[0].terms == ()
+
+
+async def test_submission_rejects_closed_term_without_persisting_intent() -> None:
+    fixture = await _selection_fixture()
+    await fixture.repository.close_term(
+        organization_id=fixture.organization_id,
+        term_id=fixture.term.id,
+    )
+
+    with pytest.raises(CourseSelectionError, match="after term closure"):
+        await fixture.service.submit(
+            context=_context(
+                organization_id=fixture.organization_id,
+                permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+            ),
+            student_academic_enrollment_id=fixture.enrollment.id,
+            term_id=fixture.term.id,
+            offering_ids=(fixture.first_offering.id,),
+        )
+
+    requests = await fixture.repository.list_selection_requests(
+        organization_id=fixture.organization_id,
+        status=None,
+        limit=100,
+        offset=0,
+    )
+    assert requests == ()
+    assert fixture.audit.events == []
+
+
+async def test_student_context_denies_missing_permission_and_cross_tenant_state() -> (
+    None
+):
+    fixture = await _selection_fixture()
+    unauthorized = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset(),
+    )
+    with pytest.raises(AuthorizationError):
+        await fixture.service.student_context(context=unauthorized)
+    assert fixture.ownership.resolve_checks == []
+
+    attacker = _context(
+        organization_id=uuid4(),
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    fixture.ownership.owned_profile_by_subject[attacker.subject_id] = (
+        fixture.enrollment.student_id
+    )
+    with pytest.raises(NotFoundError, match="Active student"):
+        await fixture.service.student_context(context=attacker)
+
+
+async def test_student_context_api_returns_typed_real_identifiers() -> None:
+    fixture = await _selection_fixture()
+    student = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    fixture.ownership.owned_profile_by_subject[student.subject_id] = (
+        fixture.enrollment.student_id
+    )
+
+    async def actor_dependency() -> TenantActorContext:
+        return student
+
+    app = FastAPI()
+    app.state.course_selection_service = fixture.service
+    install_error_handlers(app)
+    app.include_router(router)
+    app.dependency_overrides[require_actor] = actor_dependency
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/v1/academics/course-selection-context")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["student_profile_id"] == str(fixture.enrollment.student_id)
+    assert payload["enrollments"][0]["id"] == str(fixture.enrollment.id)
+    assert payload["enrollments"][0]["terms"][0]["id"] == str(fixture.term.id)
+    offering = payload["enrollments"][0]["terms"][0]["offerings"][0]
+    assert set(offering) == {
+        "id",
+        "course_id",
+        "course_code",
+        "course_title",
+        "section_code",
+        "credits",
+        "capacity",
+        "meeting_windows",
+    }
 
 
 async def test_listing_selection_requests_is_tenant_scoped_filtered_and_stable() -> (
@@ -560,7 +735,265 @@ async def test_approval_creates_official_enrollment_and_history() -> None:
     assert len(approvals) == 1
     assert approvals[0].actor_id == approver.subject_id
     assert fixture.audit.events[-1].action == ("academics.course_selection.approved")
+    assert fixture.audit.events[-2].outcome == "intent_recorded"
+    assert fixture.audit.events[-1].outcome == "succeeded"
     assert fixture.audit.events[-1].actor_subject_id == approver.subject_id
+
+
+async def test_approval_revalidates_current_policy_and_keeps_request_pending() -> None:
+    fixture = await _selection_fixture()
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    request = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    policy = await fixture.repository.get_selection_policy(
+        organization_id=fixture.organization_id,
+        program_id=fixture.enrollment.program_id,
+        term_id=fixture.term.id,
+    )
+    assert policy is not None
+    await fixture.repository.save_selection_policy(
+        replace(policy, maximum_credits=Decimal("2"))
+    )
+    approver = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+    )
+
+    with pytest.raises(CourseSelectionDecisionError, match="maximum_credits"):
+        await fixture.service.decide(
+            context=approver,
+            request_id=request.id,
+            approved=True,
+        )
+
+    stored = await fixture.repository.get_selection_request(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.enrollment.id,
+    )
+    approvals = await fixture.repository.list_approvals(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    assert stored is not None and stored.status is CourseSelectionStatus.PENDING
+    assert enrollments == ()
+    assert approvals == ()
+    assert [event.action for event in fixture.audit.events] == [
+        "academics.course_selection.approval_requested"
+    ]
+    assert fixture.audit.events[0].outcome == "intent_recorded"
+
+
+async def test_approval_revalidates_deadline_at_decision_time() -> None:
+    fixture = await _selection_fixture()
+    request = await fixture.service.submit(
+        context=_context(
+            organization_id=fixture.organization_id,
+            permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+        ),
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    late_service = CourseSelectionService(
+        catalog=fixture.repository,
+        selections=fixture.repository,
+        clock=FakeClock(datetime(2026, 8, 21, tzinfo=UTC)),
+        audit=fixture.audit,
+        ownership=fixture.ownership,
+    )
+
+    with pytest.raises(CourseSelectionDecisionError, match="deadline_passed"):
+        await late_service.decide(
+            context=_context(
+                organization_id=fixture.organization_id,
+                permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+            ),
+            request_id=request.id,
+            approved=True,
+        )
+
+    stored = await fixture.repository.get_selection_request(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.enrollment.id,
+    )
+    approvals = await fixture.repository.list_approvals(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    assert stored is not None and stored.status is CourseSelectionStatus.PENDING
+    assert enrollments == ()
+    assert approvals == ()
+    assert [event.action for event in fixture.audit.events] == [
+        "academics.course_selection.approval_requested"
+    ]
+
+
+async def test_approval_revalidates_active_academic_enrollment() -> None:
+    fixture = await _selection_fixture()
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    request = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    await fixture.repository.save_student_enrollment(
+        replace(fixture.enrollment, status=AcademicEnrollmentStatus.WITHDRAWN)
+    )
+
+    with pytest.raises(CourseSelectionError, match="not active"):
+        await fixture.service.decide(
+            context=_context(
+                organization_id=fixture.organization_id,
+                permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+            ),
+            request_id=request.id,
+            approved=True,
+        )
+
+    stored = await fixture.repository.get_selection_request(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    assert stored is not None and stored.status is CourseSelectionStatus.PENDING
+    assert [event.action for event in fixture.audit.events] == [
+        "academics.course_selection.approval_requested"
+    ]
+    assert fixture.audit.events[0].outcome == "intent_recorded"
+
+
+async def test_approval_rejects_request_after_term_closure() -> None:
+    fixture = await _selection_fixture()
+    request = await fixture.service.submit(
+        context=_context(
+            organization_id=fixture.organization_id,
+            permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+        ),
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    await fixture.repository.close_term(
+        organization_id=fixture.organization_id,
+        term_id=fixture.term.id,
+    )
+
+    with pytest.raises(CourseSelectionError, match="after term closure"):
+        await fixture.service.decide(
+            context=_context(
+                organization_id=fixture.organization_id,
+                permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+            ),
+            request_id=request.id,
+            approved=True,
+        )
+
+    stored = await fixture.repository.get_selection_request(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.enrollment.id,
+    )
+    assert stored is not None and stored.status is CourseSelectionStatus.PENDING
+    assert enrollments == ()
+    assert [event.action for event in fixture.audit.events] == [
+        "academics.course_selection.approval_requested"
+    ]
+    assert fixture.audit.events[0].outcome == "intent_recorded"
+
+
+async def test_approval_honors_the_same_explicit_submitted_override() -> None:
+    fixture = await _selection_fixture()
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset(
+            {ACADEMICS_SELECTION_SUBMIT, ACADEMICS_SELECTION_OVERRIDE}
+        ),
+    )
+    request = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.second_offering.id,),
+        override_reason="Registrar approved prerequisite exception.",
+    )
+
+    decided = await fixture.service.decide(
+        context=_context(
+            organization_id=fixture.organization_id,
+            permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+        ),
+        request_id=request.id,
+        approved=True,
+    )
+
+    assert decided.status is CourseSelectionStatus.APPROVED
+    assert [event.action for event in fixture.audit.events] == [
+        "academics.course_selection.override_requested",
+        "academics.course_selection.override_applied",
+        "academics.course_selection.approval_requested",
+        "academics.course_selection.approved",
+    ]
+
+
+async def test_decision_requires_permission_and_hides_cross_tenant_request() -> None:
+    fixture = await _selection_fixture()
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    request = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+
+    with pytest.raises(AuthorizationError):
+        await fixture.service.decide(
+            context=_context(
+                organization_id=fixture.organization_id,
+                permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+            ),
+            request_id=request.id,
+            approved=True,
+        )
+    with pytest.raises(NotFoundError):
+        await fixture.service.decide(
+            context=_context(
+                organization_id=uuid4(),
+                permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+            ),
+            request_id=request.id,
+            approved=True,
+        )
+
+    stored = await fixture.repository.get_selection_request(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    assert stored is not None and stored.status is CourseSelectionStatus.PENDING
+    assert fixture.audit.events == []
 
 
 async def test_cross_tenant_selection_does_not_reveal_resource() -> None:
@@ -620,6 +1053,77 @@ async def test_override_permission_is_deny_by_default() -> None:
         )
 
 
+async def test_override_audit_failure_prevents_request_persistence() -> None:
+    audit = RecordingCourseSelectionAuditSink(
+        fail_on_actions={"academics.course_selection.override_requested"}
+    )
+    fixture = await _selection_fixture(audit=audit)
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset(
+            {ACADEMICS_SELECTION_SUBMIT, ACADEMICS_SELECTION_OVERRIDE}
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="audit is unavailable"):
+        await fixture.service.submit(
+            context=submitter,
+            student_academic_enrollment_id=fixture.enrollment.id,
+            term_id=fixture.term.id,
+            offering_ids=(fixture.second_offering.id,),
+            override_reason="Registrar exception.",
+        )
+
+    requests = await fixture.repository.list_selection_requests(
+        organization_id=fixture.organization_id,
+        status=None,
+        limit=100,
+        offset=0,
+    )
+    assert requests == ()
+    assert fixture.audit.events == []
+
+
+async def test_approval_audit_failure_keeps_request_pending_without_enrollment() -> (
+    None
+):
+    audit = RecordingCourseSelectionAuditSink(
+        fail_on_actions={"academics.course_selection.approval_requested"}
+    )
+    fixture = await _selection_fixture(audit=audit)
+    request = await fixture.service.submit(
+        context=_context(
+            organization_id=fixture.organization_id,
+            permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+        ),
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+
+    with pytest.raises(RuntimeError, match="audit is unavailable"):
+        await fixture.service.decide(
+            context=_context(
+                organization_id=fixture.organization_id,
+                permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+            ),
+            request_id=request.id,
+            approved=True,
+        )
+
+    stored = await fixture.repository.get_selection_request(
+        organization_id=fixture.organization_id,
+        request_id=request.id,
+    )
+    enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.enrollment.id,
+    )
+    assert stored is not None and stored.status is CourseSelectionStatus.PENDING
+    assert enrollments == ()
+    assert fixture.audit.events == []
+
+
 async def test_auto_enrollment_capacity_is_atomic_under_concurrency() -> None:
     import asyncio
 
@@ -647,3 +1151,165 @@ async def test_auto_enrollment_capacity_is_atomic_under_concurrency() -> None:
 
     assert sum(isinstance(result, CourseSelectionRequest) for result in results) == 1
     assert sum(isinstance(result, CourseSelectionError) for result in results) == 1
+
+
+async def test_pending_approval_capacity_is_atomic_under_concurrency() -> None:
+    import asyncio
+
+    fixture = await _selection_fixture(capacity=1)
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    first = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    second = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.second_enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    approver = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+    )
+
+    results = await asyncio.gather(
+        fixture.service.decide(
+            context=approver,
+            request_id=first.id,
+            approved=True,
+        ),
+        fixture.service.decide(
+            context=approver,
+            request_id=second.id,
+            approved=True,
+        ),
+        return_exceptions=True,
+    )
+
+    requests = await fixture.repository.list_selection_requests(
+        organization_id=fixture.organization_id,
+        status=None,
+        limit=100,
+        offset=0,
+    )
+    first_enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.enrollment.id,
+    )
+    second_enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.second_enrollment.id,
+    )
+    assert sum(isinstance(result, CourseSelectionRequest) for result in results) == 1
+    assert sum(isinstance(result, CourseSelectionError) for result in results) == 1
+    assert {request.status for request in requests} == {
+        CourseSelectionStatus.APPROVED,
+        CourseSelectionStatus.PENDING,
+    }
+    assert len(first_enrollments) + len(second_enrollments) == 1
+    assert (
+        sum(
+            event.action == "academics.course_selection.approval_requested"
+            for event in fixture.audit.events
+        )
+        == 2
+    )
+    assert (
+        sum(
+            event.action == "academics.course_selection.approved"
+            for event in fixture.audit.events
+        )
+        == 1
+    )
+
+
+async def test_same_student_approvals_revalidate_inside_aggregate_lock() -> None:
+    import asyncio
+
+    fixture = await _selection_fixture()
+    policy = await fixture.repository.get_selection_policy(
+        organization_id=fixture.organization_id,
+        program_id=fixture.enrollment.program_id,
+        term_id=fixture.term.id,
+    )
+    curriculum = await fixture.repository.get_curriculum(
+        organization_id=fixture.organization_id,
+        program_id=fixture.enrollment.program_id,
+        academic_year_id=fixture.enrollment.academic_year_id,
+    )
+    assert policy is not None and curriculum is not None
+    await fixture.repository.save_selection_policy(
+        replace(policy, maximum_credits=Decimal("4"))
+    )
+    await fixture.repository.save_curriculum(
+        replace(
+            curriculum,
+            courses=tuple(
+                replace(course, prerequisite_course_ids=frozenset())
+                for course in curriculum.courses
+            ),
+        )
+    )
+    submitter = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_SUBMIT}),
+    )
+    first = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.first_offering.id,),
+    )
+    second = await fixture.service.submit(
+        context=submitter,
+        student_academic_enrollment_id=fixture.enrollment.id,
+        term_id=fixture.term.id,
+        offering_ids=(fixture.second_offering.id,),
+    )
+    approver = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ACADEMICS_SELECTION_APPROVE}),
+    )
+
+    results = await asyncio.gather(
+        fixture.service.decide(
+            context=approver,
+            request_id=first.id,
+            approved=True,
+        ),
+        fixture.service.decide(
+            context=approver,
+            request_id=second.id,
+            approved=True,
+        ),
+        return_exceptions=True,
+    )
+
+    requests = await fixture.repository.list_selection_requests(
+        organization_id=fixture.organization_id,
+        status=None,
+        limit=100,
+        offset=0,
+    )
+    enrollments = await fixture.repository.list_course_enrollments(
+        organization_id=fixture.organization_id,
+        student_academic_enrollment_id=fixture.enrollment.id,
+    )
+    assert sum(isinstance(result, CourseSelectionRequest) for result in results) == 1
+    assert (
+        sum(isinstance(result, CourseSelectionDecisionError) for result in results) == 1
+    )
+    assert {request.status for request in requests} == {
+        CourseSelectionStatus.APPROVED,
+        CourseSelectionStatus.PENDING,
+    }
+    assert len(enrollments) == 1
+    actions = [event.action for event in fixture.audit.events]
+    assert actions.count("academics.course_selection.approval_requested") == 2
+    assert actions.count("academics.course_selection.approved") == 1

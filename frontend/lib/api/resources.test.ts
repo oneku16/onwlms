@@ -60,6 +60,70 @@ describe("resource projections", () => {
     ]);
   });
 
+  it("renders room, provisioning, and audit response shapes without dropping rows", () => {
+    const room = parseResourceCollection([
+      {
+        id: "room-1",
+        campus_id: "campus-1",
+        code: "A-101",
+        room_type: "lecture",
+        capacity: 40,
+      },
+    ]);
+    const provisioning = parseResourceCollection([
+      {
+        id: "job-1",
+        subject_type: "person",
+        subject_id: "person-1",
+        target: "moodle",
+        status: "pending",
+        attempts: 0,
+        created_at: "2026-08-07T09:00:00Z",
+        updated_at: "2026-08-07T09:00:00Z",
+      },
+    ]);
+    const audit = parseResourceCollection([
+      {
+        id: "audit-1",
+        organization_id: "organization-1",
+        actor_subject_id: "subject-1",
+        action: "membership.revoked",
+        entity_type: "people_access",
+        entity_id: "membership-1",
+        occurred_at: "2026-08-07T09:00:00Z",
+        source: "api",
+        outcome: "succeeded",
+        correlation_id: "correlation-1",
+      },
+    ]);
+
+    expect(room.items[0]).toEqual(
+      expect.objectContaining({
+        title: "A-101 · lecture",
+        subtitle: "Capacity 40",
+      }),
+    );
+    expect(provisioning.items[0]).toEqual(
+      expect.objectContaining({
+        title: "moodle provisioning",
+        subtitle: "person",
+        status: "pending",
+      }),
+    );
+    expect(audit.items[0]).toEqual(
+      expect.objectContaining({
+        title: "membership.revoked · people_access",
+        subtitle: "membership-1",
+      }),
+    );
+  });
+
+  it("fails visibly instead of silently dropping an unsupported row", () => {
+    expect(() => parseResourceCollection([{ unexpected: true }])).toThrow(
+      "The resource collection response is not supported.",
+    );
+  });
+
   it("flattens only authorized linked-student official grades", () => {
     const collection = parseGuardianGradeCollection([
       {
@@ -86,5 +150,24 @@ describe("resource projections", () => {
         status: "A",
       },
     ]);
+  });
+
+  it("fails visibly instead of omitting a malformed official guardian grade", () => {
+    expect(() =>
+      parseGuardianGradeCollection([
+        {
+          student_person_id: "student-1",
+          display_name: "A. Student",
+          latest_official_grades: [
+            {
+              course_code: "MATH-101",
+              course_title: "Calculus",
+              display_grade: "A",
+              grade_points: "4.0",
+            },
+          ],
+        },
+      ]),
+    ).toThrow("The guardian grade response is not supported.");
   });
 });

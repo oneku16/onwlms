@@ -116,21 +116,24 @@ async def test_application_sink_minimizes_governance_evidence() -> None:
     request_id = uuid7()
     term_id = uuid7()
     job_id = uuid7()
+    scheduling_id = uuid7()
 
     await sink.record_final_grade_event(
-        action="grading.final_grade.revised",
+        action="grading.final_grade.revision_requested",
         organization_id=organization_id,
         actor_subject_id=actor_subject_id,
         final_grade_id=grade_id,
         correlation_id="grade-correlation",
         after_term_closure=True,
+        outcome="intent_recorded",
     )
     await sink.record_course_selection_event(
-        action="academics.course_selection.rejected",
+        action="academics.course_selection.rejection_requested",
         organization_id=organization_id,
         actor_subject_id=actor_subject_id,
         request_id=request_id,
         correlation_id="selection-correlation",
+        outcome="intent_recorded",
     )
     await sink.record_term_closure_intent(
         organization_id=organization_id,
@@ -140,9 +143,11 @@ async def test_application_sink_minimizes_governance_evidence() -> None:
         reason="Registrar approval",
     )
     await sink.record_moodle_configuration_event(
+        action="integrations.moodle.configuration.updated",
         organization_id=organization_id,
         actor_subject_id=actor_subject_id,
         correlation_id="moodle-correlation",
+        outcome="succeeded",
     )
     await sink.record_provisioning_attempt(
         organization_id=organization_id,
@@ -154,12 +159,26 @@ async def test_application_sink_minimizes_governance_evidence() -> None:
         correlation_id="provisioning-correlation",
         worker_initiated=True,
     )
+    await sink.record_scheduling_event(
+        action="scheduling.session.create.intent",
+        organization_id=organization_id,
+        actor_subject_id=actor_subject_id,
+        target_id=scheduling_id,
+        correlation_id="scheduling-correlation",
+        outcome="intent_recorded",
+    )
 
-    grade, selection, closure_intent, moodle, provisioning = repository.records
+    grade, selection, closure_intent, moodle, provisioning, scheduling = (
+        repository.records
+    )
     assert grade.entity_id == str(grade_id)
+    assert grade.action == "grading.final_grade.revision_requested"
+    assert grade.outcome == "intent_recorded"
     assert grade.reason is None
     assert grade.metadata == {"after_term_closure": True}
     assert selection.entity_id == str(request_id)
+    assert selection.action == "academics.course_selection.rejection_requested"
+    assert selection.outcome == "intent_recorded"
     assert selection.reason is None
     assert selection.metadata is None
     assert closure_intent.organization_id == organization_id
@@ -172,8 +191,15 @@ async def test_application_sink_minimizes_governance_evidence() -> None:
     assert closure_intent.reason == "Registrar approval"
     assert closure_intent.metadata is None
     assert moodle.entity_id == str(organization_id)
+    assert moodle.outcome == "succeeded"
     assert moodle.reason is None
     assert moodle.metadata is None
     assert provisioning.entity_id == str(job_id)
     assert provisioning.source is AuditSource.WORKER
     assert provisioning.metadata == {"target": "moodle", "attempt": 2}
+    assert scheduling.entity_type == "scheduling_resource"
+    assert scheduling.entity_id == str(scheduling_id)
+    assert scheduling.action == "scheduling.session.create.intent"
+    assert scheduling.outcome == "intent_recorded"
+    assert scheduling.reason is None
+    assert scheduling.metadata is None

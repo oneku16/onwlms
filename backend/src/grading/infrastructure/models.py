@@ -142,6 +142,14 @@ class FinalGradeModel(
             "revision_number >= 0",
             name="revision_nonnegative",
         ),
+        CheckConstraint(
+            "(recorded_after_term_closure "
+            "AND recording_explanation IS NOT NULL "
+            "AND char_length(btrim(recording_explanation)) > 0) "
+            "OR (NOT recorded_after_term_closure "
+            "AND recording_explanation IS NULL)",
+            name="recording_explanation_matches_closure",
+        ),
     )
 
     student_academic_enrollment_id: Mapped[UUID] = mapped_column(
@@ -186,6 +194,14 @@ class FinalGradeModel(
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
+    )
+    recorded_after_term_closure: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+    recording_explanation: Mapped[str | None] = mapped_column(
+        String(2000),
+        nullable=True,
     )
     grade_updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

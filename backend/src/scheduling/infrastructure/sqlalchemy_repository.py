@@ -1,5 +1,6 @@
 """PostgreSQL scheduling repository with tenant scope and optimistic writes."""
 
+import hashlib
 from collections.abc import Iterable
 from datetime import datetime
 from uuid import UUID
@@ -7,21 +8,67 @@ from uuid import UUID
 from sqlalchemy import delete
 from sqlalchemy import or_
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ConflictError
 from core.identifiers import new_uuid7
+from scheduling.domain.constraints import detect_hard_conflicts
 from scheduling.domain.exceptions import ScheduleVersionConflictError
+from scheduling.domain.exceptions import SchedulingConflictError
 from scheduling.domain.exceptions import SchedulingRuleError
+from scheduling.domain.models import ConstraintContext
 from scheduling.domain.models import RecurrenceRule
 from scheduling.domain.models import ScheduledSession
 from scheduling.domain.models import TeacherAvailabilityWindow
+from scheduling.domain.replacement import prepare_generated_replacement
 from scheduling.infrastructure.models import ScheduledSessionGroupModel
 from scheduling.infrastructure.models import ScheduledSessionModel
 from scheduling.infrastructure.models import ScheduledSessionTeacherModel
 from scheduling.infrastructure.models import TeacherAvailabilityWindowModel
 from shared.database import Database
+
+
+def _advisory_lock_key(
+    *,
+    organization_id: UUID,
+    resource_kind: str,
+    resource_id: UUID | None,
+) -> int:
+    """Derive a stable signed PostgreSQL advisory-lock key for one resource."""
+
+    digest = hashlib.blake2b(digest_size=8, person=b"ownsis-schedule")
+    digest.update(organization_id.bytes)
+    digest.update(b"\x00")
+    digest.update(resource_kind.encode("ascii"))
+    if resource_id is not None:
+        digest.update(b"\x00")
+        digest.update(resource_id.bytes)
+    return int.from_bytes(digest.digest(), byteorder="big", signed=True)
+
+
+async def _try_advisory_transaction_lock(
+    *,
+    database_session: AsyncSession,
+    lock_key: int,
+    shared: bool,
+) -> None:
+    """Acquire a transaction-owned lock or return a retryable timetable conflict."""
+
+    statement = (
+        text("SELECT pg_try_advisory_xact_lock_shared(:lock_key)")
+        if shared
+        else text("SELECT pg_try_advisory_xact_lock(:lock_key)")
+    )
+    acquired = await database_session.scalar(
+        statement,
+        {"lock_key": lock_key},
+    )
+    if acquired is not True:
+        raise SchedulingConflictError(
+            "Timetable resources are being updated; retry the request."
+        )
 
 
 class SQLAlchemySchedulingRepository:
@@ -111,37 +158,66 @@ class SQLAlchemySchedulingRepository:
         session: ScheduledSession,
         expected_version: int | None,
     ) -> None:
-        """Create or compare-and-swap one timetable session atomically."""
+        """Compare-and-swap session state under its booking resource locks."""
 
         try:
             async with self._database.session(
                 organization_id=session.organization_id,
             ) as database_session:
-                current = await database_session.scalar(
-                    select(ScheduledSessionModel)
-                    .where(
-                        ScheduledSessionModel.organization_id
-                        == session.organization_id,
-                        ScheduledSessionModel.id == session.id,
-                    )
-                    .with_for_update()
+                await self._acquire_normal_write_locks(
+                    database_session=database_session,
+                    value=session,
                 )
-                if expected_version is None:
-                    if current is not None:
-                        raise ConflictError("Timetable session already exists.")
-                    database_session.add(self._to_model(session))
-                else:
-                    if current is None or current.version != expected_version:
-                        raise ScheduleVersionConflictError(
-                            "Timetable session changed during the requested edit."
-                        )
-                    self._apply(model=current, value=session)
-                    await self._delete_members(
+                await self._save_session(
+                    database_session=database_session,
+                    value=session,
+                    expected_version=expected_version,
+                )
+        except IntegrityError as exc:
+            raise ConflictError(
+                "Timetable session conflicts with stored data."
+            ) from exc
+
+    async def save_conflict_free_session(
+        self,
+        *,
+        session: ScheduledSession,
+        expected_version: int | None,
+        constraints: ConstraintContext,
+    ) -> None:
+        """Lock booking resources, recheck stored conflicts, and save atomically."""
+
+        try:
+            async with self._database.session(
+                organization_id=session.organization_id,
+            ) as database_session:
+                await self._acquire_normal_write_locks(
+                    database_session=database_session,
+                    value=session,
+                )
+                existing = tuple(
+                    value
+                    for value in await self._load_sessions(
                         session=database_session,
                         organization_id=session.organization_id,
-                        session_ids=(session.id,),
                     )
-                self._add_members(database_session, session)
+                    if value.id != session.id
+                )
+                conflicts = detect_hard_conflicts(
+                    candidate=session,
+                    existing_sessions=existing,
+                    context=constraints,
+                )
+                if conflicts:
+                    codes = ", ".join(
+                        dict.fromkeys(conflict.code for conflict in conflicts)
+                    )
+                    raise SchedulingConflictError(f"Session conflicts with: {codes}.")
+                await self._save_session(
+                    database_session=database_session,
+                    value=session,
+                    expected_version=expected_version,
+                )
         except IntegrityError as exc:
             raise ConflictError(
                 "Timetable session conflicts with stored data."
@@ -154,7 +230,8 @@ class SQLAlchemySchedulingRepository:
         proposed_sessions: tuple[ScheduledSession, ...],
         locked_session_ids: frozenset[UUID],
         expected_versions: dict[UUID, int],
-    ) -> None:
+        constraints: ConstraintContext,
+    ) -> tuple[ScheduledSession, ...]:
         """Atomically replace a proposal after locking and validating current state."""
 
         proposed_by_id = {value.id: value for value in proposed_sessions}
@@ -166,6 +243,11 @@ class SQLAlchemySchedulingRepository:
             async with self._database.session(
                 organization_id=organization_id,
             ) as session:
+                await self._acquire_tenant_write_lock(
+                    database_session=session,
+                    organization_id=organization_id,
+                    shared=False,
+                )
                 locked_models = tuple(
                     (
                         await session.scalars(
@@ -183,23 +265,30 @@ class SQLAlchemySchedulingRepository:
                     organization_id=organization_id,
                     session_ids=current_ids,
                 )
-                current_by_id = {value.id: value for value in current}
-                if {
-                    identifier: value.version
-                    for identifier, value in current_by_id.items()
-                } != expected_versions:
-                    raise ScheduleVersionConflictError(
-                        "Timetable changed after schedule generation."
+                prepared_sessions = prepare_generated_replacement(
+                    organization_id=organization_id,
+                    current_sessions=current,
+                    proposed_sessions=proposed_sessions,
+                    asserted_locked_session_ids=locked_session_ids,
+                    expected_versions=expected_versions,
+                )
+                prepared_by_id = {value.id: value for value in prepared_sessions}
+                conflicts = tuple(
+                    conflict
+                    for candidate in prepared_sessions
+                    for conflict in detect_hard_conflicts(
+                        candidate=candidate,
+                        existing_sessions=prepared_sessions,
+                        context=constraints,
                     )
-                if not locked_session_ids.issubset(current_by_id):
-                    raise ScheduleVersionConflictError(
-                        "A locked timetable session no longer exists."
+                )
+                if conflicts:
+                    codes = ", ".join(
+                        dict.fromkeys(conflict.code for conflict in conflicts)
                     )
-                for locked_id in locked_session_ids:
-                    if proposed_by_id.get(locked_id) != current_by_id[locked_id]:
-                        raise ScheduleVersionConflictError(
-                            "Generated schedule changed a locked session."
-                        )
+                    raise SchedulingConflictError(
+                        f"Generated proposal conflicts with: {codes}."
+                    )
                 await self._delete_members(
                     session=session,
                     organization_id=organization_id,
@@ -207,19 +296,119 @@ class SQLAlchemySchedulingRepository:
                 )
                 current_model_by_id = {model.id: model for model in locked_models}
                 for identifier, model in current_model_by_id.items():
-                    proposed = proposed_by_id.get(identifier)
+                    proposed = prepared_by_id.get(identifier)
                     if proposed is None:
                         await session.delete(model)
                     else:
                         self._apply(model=model, value=proposed)
-                for value in proposed_sessions:
+                for value in prepared_sessions:
                     if value.id not in current_model_by_id:
                         session.add(self._to_model(value))
+                await session.flush()
+                for value in prepared_sessions:
                     self._add_members(session, value)
+                return prepared_sessions
         except IntegrityError as exc:
             raise ConflictError(
                 "Generated timetable conflicts with stored data."
             ) from exc
+
+    async def _acquire_normal_write_locks(
+        self,
+        *,
+        database_session: AsyncSession,
+        value: ScheduledSession,
+    ) -> None:
+        """Acquire shared tenant and exclusive booking locks without waiting."""
+
+        await self._acquire_tenant_write_lock(
+            database_session=database_session,
+            organization_id=value.organization_id,
+            shared=True,
+        )
+        lock_keys = {
+            _advisory_lock_key(
+                organization_id=value.organization_id,
+                resource_kind="room",
+                resource_id=value.room_id,
+            ),
+            *(
+                _advisory_lock_key(
+                    organization_id=value.organization_id,
+                    resource_kind="teacher",
+                    resource_id=teacher_id,
+                )
+                for teacher_id in value.teacher_ids
+            ),
+            *(
+                _advisory_lock_key(
+                    organization_id=value.organization_id,
+                    resource_kind="required_group",
+                    resource_id=group_id,
+                )
+                for group_id in value.required_group_ids
+            ),
+        }
+        for lock_key in sorted(lock_keys):
+            await _try_advisory_transaction_lock(
+                database_session=database_session,
+                lock_key=lock_key,
+                shared=False,
+            )
+
+    async def _acquire_tenant_write_lock(
+        self,
+        *,
+        database_session: AsyncSession,
+        organization_id: UUID,
+        shared: bool,
+    ) -> None:
+        """Coordinate ordinary writes with tenant-wide generated replacement."""
+
+        await _try_advisory_transaction_lock(
+            database_session=database_session,
+            lock_key=_advisory_lock_key(
+                organization_id=organization_id,
+                resource_kind="tenant_schedule",
+                resource_id=None,
+            ),
+            shared=shared,
+        )
+
+    async def _save_session(
+        self,
+        *,
+        database_session: AsyncSession,
+        value: ScheduledSession,
+        expected_version: int | None,
+    ) -> None:
+        """Persist one session inside an already locked transaction."""
+
+        current = await database_session.scalar(
+            select(ScheduledSessionModel)
+            .where(
+                ScheduledSessionModel.organization_id == value.organization_id,
+                ScheduledSessionModel.id == value.id,
+            )
+            .with_for_update()
+        )
+        if expected_version is None:
+            if current is not None:
+                raise ConflictError("Timetable session already exists.")
+            database_session.add(self._to_model(value))
+        else:
+            if current is None or current.version != expected_version:
+                raise ScheduleVersionConflictError(
+                    "Timetable session changed during the requested edit."
+                )
+            self._apply(model=current, value=value)
+            await self._delete_members(
+                session=database_session,
+                organization_id=value.organization_id,
+                session_ids=(value.id,),
+            )
+        await database_session.flush()
+        self._add_members(database_session, value)
 
     @staticmethod
     def _to_model(value: ScheduledSession) -> ScheduledSessionModel:

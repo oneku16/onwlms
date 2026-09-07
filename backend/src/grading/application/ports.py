@@ -1,5 +1,6 @@
 """Application-owned official grading persistence and collaboration ports."""
 
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -104,6 +105,19 @@ class TermClosureDirectory(Protocol):
         ...
 
 
+class TermGradeWriteGuard(Protocol):
+    """Serialize official-grade writes with Academic term closure."""
+
+    def hold_grade_write(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> AbstractAsyncContextManager[None]:
+        """Hold shared tenant-term protection through closure check and commit."""
+        ...
+
+
 class GradingClock(Protocol):
     """Supply explicit timezone-aware grading application time."""
 
@@ -124,8 +138,9 @@ class GradingAuditSink(Protocol):
         final_grade_id: UUID,
         correlation_id: str,
         after_term_closure: bool,
+        outcome: str,
     ) -> None:
-        """Record one successful grade mutation without grade values."""
+        """Record one grade-mutation intent or outcome without grade values."""
         ...
 
 
@@ -135,4 +150,5 @@ __all__ = [
     "GradingClock",
     "GradingRepository",
     "TermClosureDirectory",
+    "TermGradeWriteGuard",
 ]

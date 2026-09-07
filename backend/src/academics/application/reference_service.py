@@ -6,6 +6,7 @@ from uuid import UUID
 
 from academics.application.contracts import AcademicGradeTarget
 from academics.application.contracts import AcademicInstructionWindow
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcademicSchedulingReferences
 from academics.application.contracts import AcademicSchedulingRoom
 from academics.application.ports import AcademicReferenceRepository
@@ -32,6 +33,21 @@ class AcademicReferenceService:
         """Validate a program and first-release intake-as-term reference pair."""
 
         return await self._repository.admissions_target_exists(
+            organization_id=organization_id,
+            program_id=program_id,
+            intake_id=intake_id,
+        )
+
+    async def admissions_target_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether Admissions may accept against this tenant target."""
+
+        return await self._repository.admissions_target_is_open(
             organization_id=organization_id,
             program_id=program_id,
             intake_id=intake_id,
@@ -101,6 +117,23 @@ class AcademicReferenceService:
                 starts_at=starts_at,
                 ends_at=ends_at,
             ),
+        )
+
+    async def existing_scheduling_reference_ids(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        cohort_ids: frozenset[UUID],
+    ) -> AcademicSchedulingReferenceIds:
+        """Resolve only exact tenant references requested by Scheduling."""
+
+        return await self._repository.existing_scheduling_reference_ids(
+            organization_id=organization_id,
+            room_ids=room_ids,
+            course_offering_ids=course_offering_ids,
+            cohort_ids=cohort_ids,
         )
 
 

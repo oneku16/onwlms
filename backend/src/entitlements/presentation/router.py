@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Annotated
+from typing import Literal
 from typing import cast
 from uuid import UUID
 
@@ -67,7 +68,10 @@ class AssignSubscriptionRequest(BaseModel):
     """Validate one organization's current subscription assignment."""
 
     plan_id: UUID
-    status: SubscriptionStatus
+    status: Literal[
+        SubscriptionStatus.TRIALING,
+        SubscriptionStatus.ACTIVE,
+    ]
     starts_at: datetime
     ends_at: datetime | None = None
 
@@ -79,6 +83,39 @@ class SetOverrideRequest(BaseModel):
     enabled: bool
     usage_limit: UsageLimitRequest | None = None
     expires_at: datetime | None = None
+
+
+class UsageLimitResponse(BaseModel):
+    """Expose one bounded usage allowance."""
+
+    amount: int
+    period: UsagePeriod
+
+
+class FeatureResponse(BaseModel):
+    """Expose one supported platform feature definition."""
+
+    id: UUID
+    code: FeatureCode
+    display_name: str
+    base_included: bool
+
+
+class PlanGrantResponse(BaseModel):
+    """Expose one feature grant within a plan."""
+
+    feature: FeatureCode
+    usage_limit: UsageLimitResponse | None
+
+
+class PlanResponse(BaseModel):
+    """Expose one platform plan and its explicit grants."""
+
+    id: UUID
+    code: str
+    display_name: str
+    active: bool
+    grants: list[PlanGrantResponse]
 
 
 def _service(request: Request) -> EntitlementService:
@@ -208,7 +245,11 @@ def serialize_resolution(resolution: ResolvedEntitlement) -> dict[str, object]:
     }
 
 
-@router.post("/platform/features", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/platform/features",
+    status_code=status.HTTP_201_CREATED,
+    response_model=FeatureResponse,
+)
 async def create_feature(
     payload: CreateFeatureRequest,
     request: Request,
@@ -228,7 +269,7 @@ async def create_feature(
     )
 
 
-@router.get("/platform/features")
+@router.get("/platform/features", response_model=list[FeatureResponse])
 async def list_features(
     request: Request,
     actor: ActorDep,
@@ -245,7 +286,11 @@ async def list_features(
     return JSONResponse([serialize_feature(feature) for feature in features])
 
 
-@router.post("/platform/plans", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/platform/plans",
+    status_code=status.HTTP_201_CREATED,
+    response_model=PlanResponse,
+)
 async def create_plan(
     payload: CreatePlanRequest,
     request: Request,
@@ -272,7 +317,7 @@ async def create_plan(
     )
 
 
-@router.get("/platform/plans")
+@router.get("/platform/plans", response_model=list[PlanResponse])
 async def list_plans(
     request: Request,
     actor: ActorDep,

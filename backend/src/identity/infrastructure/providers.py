@@ -27,6 +27,17 @@ class OwnIDDiscovery:
     token_endpoint: str
     jwks_uri: str
     revocation_endpoint: str | None
+    introspection_endpoint: str
+    end_session_endpoint: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DevelopmentTokenFamily:
+    """Keep one local session's provider values independent from other sessions."""
+
+    access_token: str
+    id_token: str
+    refresh_token: str
 
 
 class OwnIDHTTPProvider:
@@ -41,6 +52,7 @@ class OwnIDHTTPProvider:
         redirect_uri: str,
         scopes: tuple[str, ...],
         http_client: httpx.AsyncClient,
+        post_logout_redirect_uri: str | None = None,
     ) -> None:
         self._issuer = issuer.rstrip("/")
         self._client_id = client_id
@@ -48,6 +60,7 @@ class OwnIDHTTPProvider:
         self._redirect_uri = redirect_uri
         self._scopes = scopes
         self._http_client = http_client
+        self._post_logout_redirect_uri = post_logout_redirect_uri
         self._discovery: OwnIDDiscovery | None = None
         self._discovery_lock = asyncio.Lock()
 
@@ -165,6 +178,63 @@ class OwnIDHTTPProvider:
         except httpx.HTTPError as exc:
             raise OwnIDProviderError from exc
 
+    async def is_session_active(
+        self,
+        *,
+        tokens: ProviderTokens,
+        expected_subject: str,
+    ) -> bool:
+        """Introspect the refresh family, or access token when no refresh exists."""
+
+        discovery = await self._get_discovery()
+        token = tokens.refresh_token or tokens.access_token
+        token_type_hint = (
+            "refresh_token" if tokens.refresh_token is not None else "access_token"
+        )
+        payload = await self._post_form(
+            discovery.introspection_endpoint,
+            {
+                "token": token,
+                "token_type_hint": token_type_hint,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+            },
+        )
+        active = payload.get("active")
+        if active is False:
+            return False
+        if active is not True:
+            raise OwnIDProviderError
+        subject = self._required_string(payload, "sub")
+        client_id = self._required_string(payload, "client_id")
+        return self._secure_equals(subject, expected_subject) and self._secure_equals(
+            client_id,
+            self._client_id,
+        )
+
+    async def end_session_url(
+        self,
+        *,
+        id_token: str,
+        state: str,
+    ) -> str | None:
+        """Build OwnID's browser logout URL from advertised discovery metadata."""
+
+        discovery = await self._get_discovery()
+        if (
+            discovery.end_session_endpoint is None
+            or self._post_logout_redirect_uri is None
+        ):
+            return None
+        query = urlencode(
+            {
+                "id_token_hint": id_token,
+                "post_logout_redirect_uri": self._post_logout_redirect_uri,
+                "state": state,
+            }
+        )
+        return f"{discovery.end_session_endpoint}?{query}"
+
     async def _get_discovery(self) -> OwnIDDiscovery:
         """Load and process-cache OwnID discovery metadata."""
 
@@ -192,6 +262,14 @@ class OwnIDHTTPProvider:
                     revocation_endpoint=self._optional_https_endpoint(
                         payload,
                         "revocation_endpoint",
+                    ),
+                    introspection_endpoint=self._https_endpoint(
+                        payload,
+                        "introspection_endpoint",
+                    ),
+                    end_session_endpoint=self._optional_https_endpoint(
+                        payload,
+                        "end_session_endpoint",
                     ),
                 )
             except (httpx.HTTPError, ValueError, TypeError) as exc:
@@ -367,10 +445,7 @@ class DevelopmentIdentityProvider:
     ) -> None:
         self._subject = subject
         self._redirect_uri = redirect_uri
-        self._expected_nonce: str | None = None
-        self._access_value = secrets.token_urlsafe(32)
-        self._id_value = secrets.token_urlsafe(32)
-        self._refresh_value = secrets.token_urlsafe(32)
+        self._active_token_families: dict[str, _DevelopmentTokenFamily] = {}
 
     async def authorization_url(
         self,
@@ -379,11 +454,15 @@ class DevelopmentIdentityProvider:
         nonce: str,
         code_challenge: str,
     ) -> str:
-        """Build a deterministic local callback only when explicitly constructed."""
+        """Build a stateless nonce-bound callback for explicit local development."""
 
         del code_challenge
-        self._expected_nonce = nonce
-        query = urlencode({"code": "development", "state": state})
+        query = urlencode(
+            {
+                "code": self._authorization_code(nonce),
+                "state": state,
+            }
+        )
         return f"{self._redirect_uri}?{query}"
 
     async def complete_authorization(
@@ -393,31 +472,29 @@ class DevelopmentIdentityProvider:
         code_verifier: str,
         expected_nonce: str,
     ) -> ProviderAuthentication:
-        """Return the configured local subject after validating the fake flow."""
+        """Return the local subject after validating the persisted flow nonce."""
 
         del code_verifier
-        if (
-            code != "development"
-            or self._expected_nonce is None
-            or not secrets.compare_digest(self._expected_nonce, expected_nonce)
-        ):
+        if not secrets.compare_digest(code, self._authorization_code(expected_nonce)):
             raise OwnIDProviderError
         return await self.authenticate_development()
 
     async def authenticate_development(self) -> ProviderAuthentication:
         """Return the configured fake identity without accepting credentials."""
 
+        family = _DevelopmentTokenFamily(
+            access_token=secrets.token_urlsafe(32),
+            id_token=secrets.token_urlsafe(32),
+            refresh_token=secrets.token_urlsafe(32),
+        )
+        self._active_token_families[family.refresh_token] = family
+
         return ProviderAuthentication(
             issuer="urn:ownsis:development",
             subject=self._subject,
             email=None,
             display_name="Development User",
-            tokens=ProviderTokens(
-                access_token=self._access_value,
-                id_token=self._id_value,
-                refresh_token=self._refresh_value,
-                expires_at=utc_now() + timedelta(hours=1),
-            ),
+            tokens=self._provider_tokens(family),
         )
 
     async def refresh(
@@ -427,26 +504,74 @@ class DevelopmentIdentityProvider:
     ) -> ProviderTokens:
         """Rotate explicit development token strings for local testing."""
 
-        if not secrets.compare_digest(refresh_token, self._refresh_value):
+        current = self._active_token_families.get(refresh_token)
+        if current is None:
             raise OwnIDProviderError
-        self._access_value = secrets.token_urlsafe(32)
-        self._id_value = secrets.token_urlsafe(32)
-        return ProviderTokens(
-            access_token=self._access_value,
-            id_token=self._id_value,
-            refresh_token=self._refresh_value,
-            expires_at=utc_now() + timedelta(hours=1),
+        rotated = _DevelopmentTokenFamily(
+            access_token=secrets.token_urlsafe(32),
+            id_token=secrets.token_urlsafe(32),
+            refresh_token=current.refresh_token,
         )
+        self._active_token_families[refresh_token] = rotated
+        return self._provider_tokens(rotated)
 
     async def revoke(
         self,
         *,
         refresh_token: str,
     ) -> None:
-        """Validate the local refresh token without an external side effect."""
+        """Revoke exactly one local token family without affecting other sessions."""
 
-        if not secrets.compare_digest(refresh_token, self._refresh_value):
+        if self._active_token_families.pop(refresh_token, None) is None:
             raise OwnIDProviderError
+
+    async def is_session_active(
+        self,
+        *,
+        tokens: ProviderTokens,
+        expected_subject: str,
+    ) -> bool:
+        """Mirror provider revocation checks for explicitly local sessions."""
+
+        if not secrets.compare_digest(
+            expected_subject,
+            self._subject,
+        ):
+            return False
+        if tokens.refresh_token is not None:
+            return tokens.refresh_token in self._active_token_families
+        return any(
+            secrets.compare_digest(tokens.access_token, family.access_token)
+            for family in self._active_token_families.values()
+        )
+
+    async def end_session_url(
+        self,
+        *,
+        id_token: str,
+        state: str,
+    ) -> str | None:
+        """Development identity has no external browser session to clear."""
+
+        del id_token, state
+        return None
+
+    @staticmethod
+    def _authorization_code(nonce: str) -> str:
+        """Bind the local callback to durable pending nonce state without memory."""
+
+        return f"development.{nonce}"
+
+    @staticmethod
+    def _provider_tokens(family: _DevelopmentTokenFamily) -> ProviderTokens:
+        """Expose one local token family through the provider port contract."""
+
+        return ProviderTokens(
+            access_token=family.access_token,
+            id_token=family.id_token,
+            refresh_token=family.refresh_token,
+            expires_at=utc_now() + timedelta(hours=1),
+        )
 
 
 def create_identity_provider(
@@ -476,8 +601,9 @@ def create_identity_provider(
     if settings.APP_ENV is AppEnvironment.PRODUCTION and (
         not settings.OWNID_ISSUER.startswith("https://")
         or not settings.OWNID_REDIRECT_URI.startswith("https://")
+        or not settings.OWNID_POST_LOGOUT_REDIRECT_URI.startswith("https://")
     ):
-        message = "Production OwnID issuer and redirect URI must use HTTPS"
+        message = "Production OwnID issuer and redirect URIs must use HTTPS"
         raise ValueError(message)
     owned_client = http_client is None
     client = http_client or httpx.AsyncClient(
@@ -491,6 +617,7 @@ def create_identity_provider(
         redirect_uri=settings.OWNID_REDIRECT_URI,
         scopes=tuple(settings.OWNID_SCOPES.split()),
         http_client=client,
+        post_logout_redirect_uri=settings.OWNID_POST_LOGOUT_REDIRECT_URI,
     )
     return provider, client if owned_client else None
 

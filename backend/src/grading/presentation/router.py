@@ -1,5 +1,6 @@
 """Thin FastAPI routes for official final-grade capabilities."""
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 from typing import cast
@@ -19,8 +20,10 @@ from core.errors import AuthorizationError
 from core.identifiers import new_uuid7
 from grading.application.service import OfficialGradingService
 from grading.domain.models import FinalGrade
+from grading.domain.models import FinalGradeHistory
 from grading.domain.models import GpaSummary
 from grading.domain.models import GradeBand
+from grading.domain.models import GradeRevision
 from grading.domain.models import GradingScale
 from grading.domain.models import GradingScaleKind
 from grading.domain.models import GradingScaleTemplate
@@ -97,6 +100,7 @@ class FinalGradeCreateBody(BaseModel):
     course_enrollment_id: UUID
     grading_scale_id: UUID
     raw_score: Decimal
+    explanation: str | None = Field(default=None, max_length=2000)
 
 
 class FinalGradeRevisionBody(BaseModel):
@@ -149,6 +153,83 @@ class FinalGradeResponse(BaseModel):
             grade_points=grade.grade_points,
             gpa_contribution=grade.gpa_contribution,
             revision_number=grade.revision_number,
+        )
+
+
+class GradeRevisionResponse(BaseModel):
+    """Serialize one immutable official-grade amendment record."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    final_grade_id: UUID
+    revision_number: int
+    previous_raw_score: Decimal
+    previous_symbol: str
+    previous_credits_earned: Decimal
+    previous_grade_points: Decimal | None
+    previous_gpa_contribution: Decimal | None
+    replacement_raw_score: Decimal
+    replacement_symbol: str
+    replacement_credits_earned: Decimal
+    replacement_grade_points: Decimal | None
+    replacement_gpa_contribution: Decimal | None
+    explanation: str
+    revised_by: UUID
+    revised_at: datetime
+    after_term_closure: bool
+
+    @classmethod
+    def from_domain(cls, revision: GradeRevision) -> GradeRevisionResponse:
+        """Map an immutable grade revision to its explicit representation."""
+
+        return cls(
+            id=revision.id,
+            final_grade_id=revision.final_grade_id,
+            revision_number=revision.revision_number,
+            previous_raw_score=revision.previous_raw_score,
+            previous_symbol=revision.previous_symbol,
+            previous_credits_earned=revision.previous_credits_earned,
+            previous_grade_points=revision.previous_grade_points,
+            previous_gpa_contribution=revision.previous_gpa_contribution,
+            replacement_raw_score=revision.replacement_raw_score,
+            replacement_symbol=revision.replacement_symbol,
+            replacement_credits_earned=revision.replacement_credits_earned,
+            replacement_grade_points=revision.replacement_grade_points,
+            replacement_gpa_contribution=revision.replacement_gpa_contribution,
+            explanation=revision.explanation,
+            revised_by=revision.revised_by,
+            revised_at=revision.revised_at,
+            after_term_closure=revision.after_term_closure,
+        )
+
+
+class FinalGradeHistoryResponse(BaseModel):
+    """Serialize initial recording evidence with immutable amendments."""
+
+    model_config = ConfigDict(frozen=True)
+
+    final_grade_id: UUID
+    recorded_by: UUID
+    recorded_at: datetime
+    recorded_after_term_closure: bool
+    recording_explanation: str | None
+    revisions: tuple[GradeRevisionResponse, ...]
+
+    @classmethod
+    def from_domain(cls, history: FinalGradeHistory) -> FinalGradeHistoryResponse:
+        """Map complete official grade history to its explicit response."""
+
+        return cls(
+            final_grade_id=history.final_grade_id,
+            recorded_by=history.recorded_by,
+            recorded_at=history.recorded_at,
+            recorded_after_term_closure=history.recorded_after_term_closure,
+            recording_explanation=history.recording_explanation,
+            revisions=tuple(
+                GradeRevisionResponse.from_domain(revision)
+                for revision in history.revisions
+            ),
         )
 
 
@@ -336,6 +417,7 @@ async def record_final_grade(
         course_enrollment_id=body.course_enrollment_id,
         grading_scale_id=body.grading_scale_id,
         raw_score=body.raw_score,
+        explanation=body.explanation,
     )
     return FinalGradeResponse.from_domain(grade)
 
@@ -362,6 +444,42 @@ async def revise_final_grade(
         expected_revision_number=body.expected_revision_number,
     )
     return FinalGradeResponse.from_domain(grade)
+
+
+@router.get(
+    "/final-grades/{final_grade_id}/revisions",
+    response_model=tuple[GradeRevisionResponse, ...],
+)
+async def revision_history(
+    final_grade_id: UUID,
+    request: Request,
+    actor: ActorDep,
+) -> tuple[GradeRevisionResponse, ...]:
+    """Return immutable history to actors authorized to amend final grades."""
+
+    revisions = await _grading_service(request).revision_history(
+        context=_tenant_actor(actor),
+        final_grade_id=final_grade_id,
+    )
+    return tuple(GradeRevisionResponse.from_domain(revision) for revision in revisions)
+
+
+@router.get(
+    "/final-grades/{final_grade_id}/history",
+    response_model=FinalGradeHistoryResponse,
+)
+async def grade_history(
+    final_grade_id: UUID,
+    request: Request,
+    actor: ActorDep,
+) -> FinalGradeHistoryResponse:
+    """Return initial recording evidence and immutable grade amendments."""
+
+    history = await _grading_service(request).grade_history(
+        context=_tenant_actor(actor),
+        final_grade_id=final_grade_id,
+    )
+    return FinalGradeHistoryResponse.from_domain(history)
 
 
 @router.get(
@@ -403,15 +521,19 @@ async def gpa_summary(
 cast(object, record_final_grade)
 cast(object, configure_scale)
 cast(object, revise_final_grade)
+cast(object, revision_history)
+cast(object, grade_history)
 cast(object, transcript)
 cast(object, gpa_summary)
 
 __all__ = [
     "FinalGradeCreateBody",
+    "FinalGradeHistoryResponse",
     "FinalGradeResponse",
     "FinalGradeRevisionBody",
     "GpaSummaryResponse",
     "GradeBandBody",
+    "GradeRevisionResponse",
     "GradingScaleBody",
     "GradingScaleResponse",
     "GradingScaleTemplateBody",

@@ -9,7 +9,9 @@ from grading.application import GradeTargetDirectory
 from grading.application import GradingRepository
 from grading.application import OfficialGradingService
 from grading.application import TermClosureDirectory
+from grading.application import TermGradeWriteGuard
 from grading.domain import FinalGrade
+from grading.domain import FinalGradeHistory
 from grading.domain import GpaSummary
 from grading.domain import GradeRevision
 from grading.domain import GradeTarget
@@ -24,6 +26,7 @@ __all__ = [
     "GRADING_SCALE_MANAGE",
     "GRADING_TRANSCRIPT_READ",
     "FinalGrade",
+    "FinalGradeHistory",
     "GpaSummary",
     "GradeRevision",
     "GradeTarget",
@@ -33,5 +36,6 @@ __all__ = [
     "GradingScaleTemplate",
     "OfficialGradingService",
     "TermClosureDirectory",
+    "TermGradeWriteGuard",
     "TranscriptRecord",
 ]

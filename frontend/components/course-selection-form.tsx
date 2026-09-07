@@ -4,56 +4,72 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 
 import { clientApiRequest } from "@/lib/api/client";
-import { parseCourseSelectionRequest } from "@/lib/api/course-selection";
+import {
+  parseCourseSelectionRequest,
+  type StudentCourseSelectionContext,
+} from "@/lib/api/course-selection";
 import { ApiError } from "@/lib/api/errors";
 import { useCsrfProtection } from "@/lib/api/use-csrf";
 
-const uuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const weekdayNames = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+] as const;
 
 export function CourseSelectionForm({
   canSubmit,
+  context,
   organizationId,
 }: {
   readonly canSubmit: boolean;
+  readonly context: StudentCourseSelectionContext;
   readonly organizationId: string;
 }) {
+  const initialEnrollment = context.enrollments[0];
+  const [enrollmentId, setEnrollmentId] = useState(initialEnrollment?.id ?? "");
+  const [termId, setTermId] = useState(initialEnrollment?.terms[0]?.id ?? "");
+  const [offeringIds, setOfferingIds] = useState<readonly string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const csrfAvailable = useCsrfProtection();
+  const enrollment = context.enrollments.find(
+    (candidate) => candidate.id === enrollmentId,
+  );
+  const term = enrollment?.terms.find((candidate) => candidate.id === termId);
+
+  function chooseEnrollment(nextEnrollmentId: string): void {
+    const nextEnrollment = context.enrollments.find(
+      (candidate) => candidate.id === nextEnrollmentId,
+    );
+    setEnrollmentId(nextEnrollmentId);
+    setTermId(nextEnrollment?.terms[0]?.id ?? "");
+    setOfferingIds([]);
+  }
+
+  function chooseOffering(offeringId: string, checked: boolean): void {
+    setOfferingIds((current) =>
+      checked
+        ? [...current, offeringId]
+        : current.filter((candidate) => candidate !== offeringId),
+    );
+  }
 
   async function submitSelection(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const studentAcademicEnrollmentId = String(
-      form.get("studentAcademicEnrollmentId") ?? "",
-    ).trim();
-    const termId = String(form.get("termId") ?? "").trim();
-    const offeringIds = String(form.get("offeringIds") ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const overrideReason = String(form.get("overrideReason") ?? "").trim();
-
     setMessage(null);
     setError(null);
-    if (
-      !uuidPattern.test(studentAcademicEnrollmentId) ||
-      !uuidPattern.test(termId) ||
-      offeringIds.length === 0 ||
-      offeringIds.some((offeringId) => !uuidPattern.test(offeringId))
-    ) {
+    if (!enrollment || !term || offeringIds.length === 0) {
       setError(
-        "Enter valid UUIDs for the academic enrollment, term, and every course offering.",
+        "Choose an active enrollment, an open term, and at least one course.",
       );
-      return;
-    }
-    if (new Set(offeringIds).size !== offeringIds.length) {
-      setError("Each course offering UUID may be submitted only once.");
       return;
     }
 
@@ -66,17 +82,16 @@ export function CourseSelectionForm({
           method: "POST",
           organizationId,
           body: {
-            student_academic_enrollment_id: studentAcademicEnrollmentId,
-            term_id: termId,
+            student_academic_enrollment_id: enrollment.id,
+            term_id: term.id,
             offering_ids: offeringIds,
-            ...(overrideReason ? { override_reason: overrideReason } : {}),
           },
         },
       );
       setMessage(
         `Course selection ${request.id} was submitted with ${request.requestedCredits} requested credits and is ${request.status}.`,
       );
-      formElement.reset();
+      setOfferingIds([]);
     } catch (caught) {
       setError(
         caught instanceof ApiError
@@ -86,6 +101,14 @@ export function CourseSelectionForm({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (context.enrollments.length === 0) {
+    return (
+      <p className="empty-state">
+        No active academic enrollment is available for course selection.
+      </p>
+    );
   }
 
   return (
@@ -100,50 +123,96 @@ export function CourseSelectionForm({
         </div>
       </div>
       <p className="inline-notice">
-        Use the academic-enrollment identifier issued for your current student
-        record. OwnSIS verifies that it belongs to your signed-in identity.
+        The choices below come from your active academic enrollment, open terms,
+        current curriculum, and available course offerings.
       </p>
       <div className="form-grid">
         <label>
-          Student academic enrollment UUID
-          <input
+          Academic enrollment
+          <select
             name="studentAcademicEnrollmentId"
-            required
-            autoComplete="off"
-            placeholder="00000000-0000-0000-0000-000000000000"
-          />
+            onChange={(event) => chooseEnrollment(event.currentTarget.value)}
+            value={enrollmentId}
+          >
+            {context.enrollments.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.programName}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
-          Term UUID
-          <input
+          Open term
+          <select
             name="termId"
-            required
-            autoComplete="off"
-            placeholder="00000000-0000-0000-0000-000000000000"
-          />
-        </label>
-        <label className="form-span">
-          Course offering UUIDs
-          <textarea
-            name="offeringIds"
-            required
-            rows={4}
-            placeholder="Separate multiple UUIDs with commas"
-          />
-          <small>
-            Submit at least one offering. Duplicate identifiers are not
-            accepted.
-          </small>
-        </label>
-        <label className="form-span">
-          Override reason (optional)
-          <textarea name="overrideReason" maxLength={1000} rows={4} />
-          <small>
-            Providing a reason requests policy review; it does not bypass
-            approval or academic rules.
-          </small>
+            onChange={(event) => {
+              setTermId(event.currentTarget.value);
+              setOfferingIds([]);
+            }}
+            value={termId}
+          >
+            {enrollment?.terms.length ? (
+              enrollment.terms.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))
+            ) : (
+              <option value="">No open selection term</option>
+            )}
+          </select>
         </label>
       </div>
+      {term ? (
+        <p className="inline-notice">
+          Select up to {term.maximumCredits} credits before{" "}
+          {new Date(term.deadline).toLocaleString()}.{" "}
+          {term.approvalRequired
+            ? "An authorized reviewer must approve the request."
+            : "Approval is not normally required."}
+        </p>
+      ) : null}
+      <fieldset disabled={!term || submitting}>
+        <legend>Available course offerings</legend>
+        {term?.offerings.length ? (
+          <div className="resource-grid">
+            {term.offerings.map((offering) => (
+              <label className="resource-card" key={offering.id}>
+                <span className="checkbox-label">
+                  <input
+                    checked={offeringIds.includes(offering.id)}
+                    name="offeringIds"
+                    onChange={(event) =>
+                      chooseOffering(offering.id, event.currentTarget.checked)
+                    }
+                    type="checkbox"
+                    value={offering.id}
+                  />
+                  <strong>
+                    {offering.courseCode} · {offering.courseTitle}
+                  </strong>
+                </span>
+                <small>
+                  Section {offering.sectionCode} · {offering.credits} credits ·
+                  capacity {offering.capacity}
+                </small>
+                {offering.meetingWindows.map((window) => (
+                  <small
+                    key={`${window.weekday}-${window.startsAt}-${window.endsAt}`}
+                  >
+                    {weekdayNames[window.weekday - 1]} {window.startsAt}–
+                    {window.endsAt}
+                  </small>
+                ))}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">
+            No curriculum-backed offerings are available for this term.
+          </p>
+        )}
+      </fieldset>
       {error ? (
         <p className="inline-alert" role="alert">
           {error}
@@ -167,7 +236,13 @@ export function CourseSelectionForm({
         <button
           className="button"
           type="submit"
-          disabled={!canSubmit || !csrfAvailable || submitting}
+          disabled={
+            !canSubmit ||
+            !csrfAvailable ||
+            submitting ||
+            !term ||
+            offeringIds.length === 0
+          }
         >
           {submitting ? "Submitting selection…" : "Submit course selection"}
         </button>

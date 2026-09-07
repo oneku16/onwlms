@@ -76,6 +76,26 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/v1/academics/course-selection-context": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * Student Course Selection Context
+     * @description Return real tenant-owned selection choices for the current student.
+     */
+    readonly get: operations["student_course_selection_context_api_v1_academics_course_selection_context_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/v1/academics/course-selection-policies/{program_id}/{term_id}": {
     readonly parameters: {
       readonly query?: never;
@@ -764,6 +784,26 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/v1/grading/final-grades/{final_grade_id}/history": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * Grade History
+     * @description Return initial recording evidence and immutable grade amendments.
+     */
+    readonly get: operations["grade_history_api_v1_grading_final_grades__final_grade_id__history_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/v1/grading/final-grades/{final_grade_id}/revisions": {
     readonly parameters: {
       readonly query?: never;
@@ -771,7 +811,11 @@ export interface paths {
       readonly path?: never;
       readonly cookie?: never;
     };
-    readonly get?: never;
+    /**
+     * Revision History
+     * @description Return immutable history to actors authorized to amend final grades.
+     */
+    readonly get: operations["revision_history_api_v1_grading_final_grades__final_grade_id__revisions_get"];
     readonly put?: never;
     /**
      * Revise Final Grade
@@ -955,13 +999,57 @@ export interface paths {
       readonly path?: never;
       readonly cookie?: never;
     };
-    readonly get?: never;
+    /**
+     * List Memberships
+     * @description List safely serialized membership governance state for one tenant.
+     */
+    readonly get: operations["list_memberships_api_v1_memberships_get"];
     readonly put?: never;
     /**
      * Create Membership
      * @description Create one multi-role membership inside the verified tenant.
      */
     readonly post: operations["create_membership_api_v1_memberships_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/memberships/{membership_id}/reactivate": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Reactivate Membership
+     * @description Reactivate one suspended non-owner membership in the verified tenant.
+     */
+    readonly post: operations["reactivate_membership_api_v1_memberships__membership_id__reactivate_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/memberships/{membership_id}/revoke": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Revoke Membership
+     * @description Permanently revoke one non-owner membership in the verified tenant.
+     */
+    readonly post: operations["revoke_membership_api_v1_memberships__membership_id__revoke_post"];
     readonly delete?: never;
     readonly options?: never;
     readonly head?: never;
@@ -982,6 +1070,26 @@ export interface paths {
      */
     readonly put: operations["replace_membership_roles_api_v1_memberships__membership_id__roles_put"];
     readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/memberships/{membership_id}/suspend": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Suspend Membership
+     * @description Suspend one non-owner membership in the verified tenant.
+     */
+    readonly post: operations["suspend_membership_api_v1_memberships__membership_id__suspend_post"];
     readonly delete?: never;
     readonly options?: never;
     readonly head?: never;
@@ -1312,6 +1420,86 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/v1/platform/administrators": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * List Platform Administrators
+     * @description List bounded platform-administrator assignment state.
+     */
+    readonly get: operations["list_platform_administrators_api_v1_platform_administrators_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/platform/administrators/{subject_id}/assign": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Assign Platform Administrator
+     * @description Assign or reactivate one existing OwnID subject.
+     */
+    readonly post: operations["assign_platform_administrator_api_v1_platform_administrators__subject_id__assign_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/platform/administrators/{subject_id}/revoke": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Revoke Platform Administrator
+     * @description Revoke one assignment while preserving a final active administrator.
+     */
+    readonly post: operations["revoke_platform_administrator_api_v1_platform_administrators__subject_id__revoke_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/platform/administrators/bootstrap": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Bootstrap Platform Administrator
+     * @description Assign the signed-in OwnID subject as the first platform admin once.
+     */
+    readonly post: operations["bootstrap_platform_administrator_api_v1_platform_administrators_bootstrap_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/v1/platform/features": {
     readonly parameters: {
       readonly query?: never;
@@ -1394,6 +1582,66 @@ export interface paths {
      * @description Appoint one owner through separately authorized platform context.
      */
     readonly post: operations["appoint_organization_owner_api_v1_platform_organizations__organization_id__owner_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/platform/organizations/{organization_id}/owners": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * List Organization Owners
+     * @description List exact-organization owner lifecycle state without tenant PII.
+     */
+    readonly get: operations["list_organization_owners_api_v1_platform_organizations__organization_id__owners_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/platform/organizations/{organization_id}/owners/{membership_id}/revoke": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Revoke Organization Owner
+     * @description Terminally revoke one owner while another active owner remains.
+     */
+    readonly post: operations["revoke_organization_owner_api_v1_platform_organizations__organization_id__owners__membership_id__revoke_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/v1/platform/organizations/{organization_id}/owners/{membership_id}/suspend": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Suspend Organization Owner
+     * @description Suspend one owner while preserving another active owner atomically.
+     */
+    readonly post: operations["suspend_organization_owner_api_v1_platform_organizations__organization_id__owners__membership_id__suspend_post"];
     readonly delete?: never;
     readonly options?: never;
     readonly head?: never;
@@ -2280,7 +2528,11 @@ export interface components {
        * Format: date-time
        */
       readonly starts_at: string;
-      readonly status: components["schemas"]["SubscriptionStatus"];
+      /**
+       * Status
+       * @enum {string}
+       */
+      readonly status: "trialing" | "active";
     };
     /**
      * AuditRecordResponse
@@ -2316,6 +2568,14 @@ export interface components {
       readonly reason: string | null;
       /** Source */
       readonly source: string;
+    };
+    /**
+     * AuthorizationStartResponse
+     * @description Describe the safe browser authorization handoff.
+     */
+    readonly AuthorizationStartResponse: {
+      /** Authorization Url */
+      readonly authorization_url: string;
     };
     /**
      * BrandingRequest
@@ -2593,6 +2853,59 @@ export interface components {
       /** Reason */
       readonly reason?: string | null;
     };
+    /**
+     * CourseSelectionEnrollmentOptionResponse
+     * @description Serialize one actor-owned active enrollment and selectable terms.
+     */
+    readonly CourseSelectionEnrollmentOptionResponse: {
+      /**
+       * Academic Year Id
+       * Format: uuid
+       */
+      readonly academic_year_id: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /**
+       * Program Id
+       * Format: uuid
+       */
+      readonly program_id: string;
+      /** Program Name */
+      readonly program_name: string;
+      /** Terms */
+      readonly terms: readonly components["schemas"]["CourseSelectionTermOptionResponse"][];
+    };
+    /**
+     * CourseSelectionOfferingOptionResponse
+     * @description Serialize one curriculum-backed selectable course offering.
+     */
+    readonly CourseSelectionOfferingOptionResponse: {
+      /** Capacity */
+      readonly capacity: number;
+      /** Course Code */
+      readonly course_code: string;
+      /**
+       * Course Id
+       * Format: uuid
+       */
+      readonly course_id: string;
+      /** Course Title */
+      readonly course_title: string;
+      /** Credits */
+      readonly credits: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /** Meeting Windows */
+      readonly meeting_windows: readonly components["schemas"]["MeetingWindowBody"][];
+      /** Section Code */
+      readonly section_code: string;
+    };
     /** CourseSelectionResponse */
     readonly CourseSelectionResponse: {
       /**
@@ -2645,6 +2958,40 @@ export interface components {
        * Format: uuid
        */
       readonly term_id: string;
+    };
+    /**
+     * CourseSelectionTermOptionResponse
+     * @description Serialize one open term and its bounded selectable offerings.
+     */
+    readonly CourseSelectionTermOptionResponse: {
+      /** Approval Required */
+      readonly approval_required: boolean;
+      /**
+       * Deadline
+       * Format: date-time
+       */
+      readonly deadline: string;
+      /**
+       * Ends On
+       * Format: date
+       */
+      readonly ends_on: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /** Maximum Credits */
+      readonly maximum_credits: string;
+      /** Name */
+      readonly name: string;
+      /** Offerings */
+      readonly offerings: readonly components["schemas"]["CourseSelectionOfferingOptionResponse"][];
+      /**
+       * Starts On
+       * Format: date
+       */
+      readonly starts_on: string;
     };
     /**
      * CreateCampusRequest
@@ -2749,6 +3096,30 @@ export interface components {
       readonly reference_number?: string | null;
       /** Title */
       readonly title?: string | null;
+    };
+    /**
+     * CurrentSessionResponse
+     * @description Expose the supported session view without provider token material.
+     */
+    readonly CurrentSessionResponse: {
+      /** Display Name */
+      readonly display_name: string;
+      /** Email */
+      readonly email: string | null;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      readonly expires_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /** Is Platform Admin */
+      readonly is_platform_admin: boolean;
+      /** Permissions */
+      readonly permissions: readonly string[];
     };
     /** CurriculumBody */
     readonly CurriculumBody: {
@@ -2898,6 +3269,15 @@ export interface components {
       readonly name: string;
     };
     /**
+     * DevelopmentLoginResponse
+     * @description Describe the explicit local-only login result.
+     */
+    readonly DevelopmentLoginResponse: {
+      /** Return Path */
+      readonly return_path: string;
+      readonly user: components["schemas"]["CurrentSessionResponse"];
+    };
+    /**
      * EducationMode
      * @description Describe how a program determines course participation.
      * @enum {string}
@@ -2969,6 +3349,22 @@ export interface components {
       | "timetable_generation"
       | "white_label";
     /**
+     * FeatureResponse
+     * @description Expose one supported platform feature definition.
+     */
+    readonly FeatureResponse: {
+      /** Base Included */
+      readonly base_included: boolean;
+      readonly code: components["schemas"]["FeatureCode"];
+      /** Display Name */
+      readonly display_name: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+    };
+    /**
      * FinalGradeCreateBody
      * @description Validate an official final-grade creation payload.
      */
@@ -2978,6 +3374,8 @@ export interface components {
        * Format: uuid
        */
       readonly course_enrollment_id: string;
+      /** Explanation */
+      readonly explanation?: string | null;
       /**
        * Grading Scale Id
        * Format: uuid
@@ -2985,6 +3383,33 @@ export interface components {
       readonly grading_scale_id: string;
       /** Raw Score */
       readonly raw_score: number | string;
+    };
+    /**
+     * FinalGradeHistoryResponse
+     * @description Serialize initial recording evidence with immutable amendments.
+     */
+    readonly FinalGradeHistoryResponse: {
+      /**
+       * Final Grade Id
+       * Format: uuid
+       */
+      readonly final_grade_id: string;
+      /** Recorded After Term Closure */
+      readonly recorded_after_term_closure: boolean;
+      /**
+       * Recorded At
+       * Format: date-time
+       */
+      readonly recorded_at: string;
+      /**
+       * Recorded By
+       * Format: uuid
+       */
+      readonly recorded_by: string;
+      /** Recording Explanation */
+      readonly recording_explanation: string | null;
+      /** Revisions */
+      readonly revisions: readonly components["schemas"]["GradeRevisionResponse"][];
     };
     /**
      * FinalGradeResponse
@@ -3149,6 +3574,58 @@ export interface components {
       readonly symbol: string;
     };
     /**
+     * GradeRevisionResponse
+     * @description Serialize one immutable official-grade amendment record.
+     */
+    readonly GradeRevisionResponse: {
+      /** After Term Closure */
+      readonly after_term_closure: boolean;
+      /** Explanation */
+      readonly explanation: string;
+      /**
+       * Final Grade Id
+       * Format: uuid
+       */
+      readonly final_grade_id: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /** Previous Credits Earned */
+      readonly previous_credits_earned: string;
+      /** Previous Gpa Contribution */
+      readonly previous_gpa_contribution: string | null;
+      /** Previous Grade Points */
+      readonly previous_grade_points: string | null;
+      /** Previous Raw Score */
+      readonly previous_raw_score: string;
+      /** Previous Symbol */
+      readonly previous_symbol: string;
+      /** Replacement Credits Earned */
+      readonly replacement_credits_earned: string;
+      /** Replacement Gpa Contribution */
+      readonly replacement_gpa_contribution: string | null;
+      /** Replacement Grade Points */
+      readonly replacement_grade_points: string | null;
+      /** Replacement Raw Score */
+      readonly replacement_raw_score: string;
+      /** Replacement Symbol */
+      readonly replacement_symbol: string;
+      /**
+       * Revised At
+       * Format: date-time
+       */
+      readonly revised_at: string;
+      /**
+       * Revised By
+       * Format: uuid
+       */
+      readonly revised_by: string;
+      /** Revision Number */
+      readonly revision_number: number;
+    };
+    /**
      * GradeSummaryResponse
      * @description Serialize one current official result without revision internals.
      */
@@ -3305,6 +3782,18 @@ export interface components {
       readonly size_bytes: number;
     };
     /**
+     * LogoutResponse
+     * @description Report local logout and optional provider propagation safely.
+     */
+    readonly LogoutResponse: {
+      /** Logged Out */
+      readonly logged_out: boolean;
+      /** Provider Logout Url */
+      readonly provider_logout_url: string | null;
+      /** Provider Revoked */
+      readonly provider_revoked: boolean;
+    };
+    /**
      * GpaSummaryResponse
      * @description Serialize exact string-valued official GPA totals.
      */
@@ -3336,6 +3825,53 @@ export interface components {
       readonly weekday: number;
     };
     /**
+     * MembershipDiscoveryResponse
+     * @description Expose the active tenant authority discoverable by one subject.
+     */
+    readonly MembershipDiscoveryResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /**
+       * Organization Id
+       * Format: uuid
+       */
+      readonly organization_id: string;
+      /** Permissions */
+      readonly permissions: readonly string[];
+      /** Roles */
+      readonly roles: readonly components["schemas"]["MembershipRole"][];
+      readonly status: components["schemas"]["MembershipStatus"];
+    };
+    /**
+     * MembershipResponse
+     * @description Expose safe tenant membership governance state.
+     */
+    readonly MembershipResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /**
+       * Identity Subject Id
+       * Format: uuid
+       */
+      readonly identity_subject_id: string;
+      /**
+       * Organization Id
+       * Format: uuid
+       */
+      readonly organization_id: string;
+      /** Person Id */
+      readonly person_id: string | null;
+      /** Roles */
+      readonly roles: readonly components["schemas"]["MembershipRole"][];
+      readonly status: components["schemas"]["MembershipStatus"];
+    };
+    /**
      * MembershipRole
      * @description Built-in tenant roles that may be combined on one membership.
      * @enum {string}
@@ -3348,6 +3884,12 @@ export interface components {
       | "guardian"
       | "staff"
       | "guest";
+    /**
+     * MembershipStatus
+     * @description Govern whether a subject may establish organization context.
+     * @enum {string}
+     */
+    readonly MembershipStatus: "active" | "suspended" | "revoked";
     /**
      * MoodleConfigurationRequest
      * @description Validate tenant Moodle endpoint and credential input.
@@ -3461,12 +4003,80 @@ export interface components {
     readonly OrganizationType:
       "school" | "college" | "university" | "institute";
     /**
+     * OwnerLifecycleResponse
+     * @description Expose owner lifecycle state without tenant person or subject data.
+     */
+    readonly OwnerLifecycleResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+      /**
+       * Organization Id
+       * Format: uuid
+       */
+      readonly organization_id: string;
+      readonly status: components["schemas"]["MembershipStatus"];
+    };
+    /**
      * PlanGrantRequest
      * @description Validate one feature grant inside a plan request.
      */
     readonly PlanGrantRequest: {
       readonly feature: components["schemas"]["FeatureCode"];
       readonly usage_limit?: components["schemas"]["UsageLimitRequest"] | null;
+    };
+    /**
+     * PlanGrantResponse
+     * @description Expose one feature grant within a plan.
+     */
+    readonly PlanGrantResponse: {
+      readonly feature: components["schemas"]["FeatureCode"];
+      readonly usage_limit: components["schemas"]["UsageLimitResponse"] | null;
+    };
+    /**
+     * PlanResponse
+     * @description Expose one platform plan and its explicit grants.
+     */
+    readonly PlanResponse: {
+      /** Active */
+      readonly active: boolean;
+      /** Code */
+      readonly code: string;
+      /** Display Name */
+      readonly display_name: string;
+      /** Grants */
+      readonly grants: readonly components["schemas"]["PlanGrantResponse"][];
+      /**
+       * Id
+       * Format: uuid
+       */
+      readonly id: string;
+    };
+    /**
+     * PlatformAdministratorBootstrapRequest
+     * @description Protect the one-time first-administrator bootstrap operation.
+     */
+    readonly PlatformAdministratorBootstrapRequest: {
+      /**
+       * Bootstrap Secret
+       * Format: password
+       */
+      readonly bootstrap_secret: string;
+    };
+    /**
+     * PlatformAdministratorResponse
+     * @description Expose safe global privilege assignment state.
+     */
+    readonly PlatformAdministratorResponse: {
+      /** Active */
+      readonly active: boolean;
+      /**
+       * Subject Id
+       * Format: uuid
+       */
+      readonly subject_id: string;
     };
     /**
      * PreferredHoursBody
@@ -3941,6 +4551,19 @@ export interface components {
       readonly feature: components["schemas"]["FeatureCode"];
       readonly usage_limit?: components["schemas"]["UsageLimitRequest"] | null;
     };
+    /**
+     * StudentCourseSelectionContextResponse
+     * @description Serialize bounded choices discovered for the current student actor.
+     */
+    readonly StudentCourseSelectionContextResponse: {
+      /** Enrollments */
+      readonly enrollments: readonly components["schemas"]["CourseSelectionEnrollmentOptionResponse"][];
+      /**
+       * Student Profile Id
+       * Format: uuid
+       */
+      readonly student_profile_id: string;
+    };
     /** StudentEnrollmentBody */
     readonly StudentEnrollmentBody: {
       /**
@@ -3960,8 +4583,6 @@ export interface components {
        * Format: uuid
        */
       readonly program_id: string;
-      /** @default active */
-      readonly status: components["schemas"]["AcademicEnrollmentStatus"];
       /**
        * Student Id
        * Format: uuid
@@ -3992,7 +4613,6 @@ export interface components {
        * Format: uuid
        */
       readonly program_id: string;
-      /** @default active */
       readonly status: components["schemas"]["AcademicEnrollmentStatus"];
       /**
        * Student Id
@@ -4000,13 +4620,6 @@ export interface components {
        */
       readonly student_id: string;
     };
-    /**
-     * SubscriptionStatus
-     * @description Govern whether plan grants participate in feature resolution.
-     * @enum {string}
-     */
-    readonly SubscriptionStatus:
-      "trialing" | "active" | "suspended" | "canceled";
     /** TeacherAssignmentBody */
     readonly TeacherAssignmentBody: {
       /**
@@ -4215,6 +4828,15 @@ export interface components {
      * @description Validate a positive usage allowance and reset period.
      */
     readonly UsageLimitRequest: {
+      /** Amount */
+      readonly amount: number;
+      readonly period: components["schemas"]["UsagePeriod"];
+    };
+    /**
+     * UsageLimitResponse
+     * @description Expose one bounded usage allowance.
+     */
+    readonly UsageLimitResponse: {
       /** Amount */
       readonly amount: number;
       readonly period: components["schemas"]["UsagePeriod"];
@@ -4517,6 +5139,37 @@ export interface operations {
         };
         content: {
           readonly "application/json": components["schemas"]["CourseOfferingResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly student_course_selection_context_api_v1_academics_course_selection_context_get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["StudentCourseSelectionContextResponse"];
         };
       };
       /** @description Validation Error */
@@ -5984,7 +6637,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["DevelopmentLoginResponse"];
         };
       };
       /** @description Validation Error */
@@ -6017,7 +6670,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["AuthorizationStartResponse"];
         };
       };
       /** @description Validation Error */
@@ -6048,7 +6701,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["LogoutResponse"];
         };
       };
       /** @description Validation Error */
@@ -6077,7 +6730,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["CurrentSessionResponse"];
         };
       };
     };
@@ -6097,7 +6750,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": readonly components["schemas"]["MembershipDiscoveryResponse"][];
         };
       };
     };
@@ -6119,7 +6772,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["CurrentSessionResponse"];
         };
       };
       /** @description Validation Error */
@@ -6256,6 +6909,72 @@ export interface operations {
         };
         content: {
           readonly "application/json": components["schemas"]["FinalGradeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly grade_history_api_v1_grading_final_grades__final_grade_id__history_get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly final_grade_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["FinalGradeHistoryResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly revision_history_api_v1_grading_final_grades__final_grade_id__revisions_get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly final_grade_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": readonly components["schemas"]["GradeRevisionResponse"][];
         };
       };
       /** @description Validation Error */
@@ -6615,6 +7334,40 @@ export interface operations {
       };
     };
   };
+  readonly list_memberships_api_v1_memberships_get: {
+    readonly parameters: {
+      readonly query?: {
+        readonly limit?: number;
+        readonly offset?: number;
+      };
+      readonly header?: {
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": readonly components["schemas"]["MembershipResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly create_membership_api_v1_memberships_post: {
     readonly parameters: {
       readonly query?: never;
@@ -6637,7 +7390,75 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["MembershipResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly reactivate_membership_api_v1_memberships__membership_id__reactivate_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly membership_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["MembershipResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly revoke_membership_api_v1_memberships__membership_id__revoke_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly membership_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["MembershipResponse"];
         };
       };
       /** @description Validation Error */
@@ -6675,7 +7496,41 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["MembershipResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly suspend_membership_api_v1_memberships__membership_id__suspend_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly membership_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["MembershipResponse"];
         };
       };
       /** @description Validation Error */
@@ -7272,6 +8127,143 @@ export interface operations {
       };
     };
   };
+  readonly list_platform_administrators_api_v1_platform_administrators_get: {
+    readonly parameters: {
+      readonly query?: {
+        readonly limit?: number;
+        readonly offset?: number;
+      };
+      readonly header?: {
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": readonly components["schemas"]["PlatformAdministratorResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly assign_platform_administrator_api_v1_platform_administrators__subject_id__assign_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly subject_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["PlatformAdministratorResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly revoke_platform_administrator_api_v1_platform_administrators__subject_id__revoke_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly subject_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["PlatformAdministratorResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly bootstrap_platform_administrator_api_v1_platform_administrators_bootstrap_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+      };
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["PlatformAdministratorBootstrapRequest"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 201: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["PlatformAdministratorResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly list_features_api_v1_platform_features_get: {
     readonly parameters: {
       readonly query?: {
@@ -7292,7 +8284,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": readonly components["schemas"]["FeatureResponse"][];
         };
       };
       /** @description Validation Error */
@@ -7328,7 +8320,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["FeatureResponse"];
         };
       };
       /** @description Validation Error */
@@ -7474,7 +8466,113 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["MembershipResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly list_organization_owners_api_v1_platform_organizations__organization_id__owners_get: {
+    readonly parameters: {
+      readonly query?: {
+        readonly limit?: number;
+        readonly offset?: number;
+      };
+      readonly header?: {
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly organization_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": readonly components["schemas"]["OwnerLifecycleResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly revoke_organization_owner_api_v1_platform_organizations__organization_id__owners__membership_id__revoke_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly membership_id: string;
+        readonly organization_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["OwnerLifecycleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly suspend_organization_owner_api_v1_platform_organizations__organization_id__owners__membership_id__suspend_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header: {
+        readonly "X-CSRF-Token": string;
+        readonly "X-Organization-ID"?: string | null;
+      };
+      readonly path: {
+        readonly membership_id: string;
+        readonly organization_id: string;
+      };
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["OwnerLifecycleResponse"];
         };
       };
       /** @description Validation Error */
@@ -7614,7 +8712,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": readonly components["schemas"]["PlanResponse"][];
         };
       };
       /** @description Validation Error */
@@ -7650,7 +8748,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": unknown;
+          readonly "application/json": components["schemas"]["PlanResponse"];
         };
       };
       /** @description Validation Error */

@@ -48,6 +48,7 @@ async def test_health_and_readiness_have_distinct_dependency_semantics(
 def test_production_configuration_requires_ownid_and_session_security() -> None:
     with pytest.raises(ValueError, match="Missing production security settings"):
         Settings(
+            _env_file=None,
             APP_ENV=AppEnvironment.PRODUCTION,
             APP_BASE_URL="https://sis.example.edu",
             COOKIE_SECURE=True,
@@ -73,6 +74,13 @@ def test_cors_rejects_wildcards_and_non_origin_paths() -> None:
 def test_enabled_mcp_requires_ownid_resource_configuration() -> None:
     with pytest.raises(ValueError, match="MCP_AUDIENCE and OWNID_ISSUER"):
         Settings(MCP_ENABLED=True)
+
+
+def test_provider_logout_redirect_requires_safe_absolute_url() -> None:
+    with pytest.raises(ValueError, match="absolute HTTP URL"):
+        Settings(OWNID_POST_LOGOUT_REDIRECT_URI="//evil.example/logout")
+    with pytest.raises(ValueError, match="absolute HTTP URL"):
+        Settings(OWNID_POST_LOGOUT_REDIRECT_URI="https://app.example/sign-in#token")
 
 
 async def test_invalid_request_id_is_replaced() -> None:

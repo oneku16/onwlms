@@ -8,7 +8,10 @@ from uuid import UUID
 from core.context import TenantActorContext
 from core.errors import AuthorizationError
 from core.errors import NotFoundError
+from scheduling.application.contracts import ExistingSchedulingReferences
+from scheduling.application.ports import SchedulingAuditSink
 from scheduling.application.ports import SchedulingGenerator
+from scheduling.application.ports import SchedulingReferenceDirectory
 from scheduling.application.ports import SchedulingRepository
 from scheduling.application.ports import SchedulingResourceDirectory
 from scheduling.application.ports import TimetableGenerationEntitlement
@@ -22,6 +25,7 @@ from scheduling.domain.models import ScheduledSession
 from scheduling.domain.models import ScheduleGenerationRequest
 from scheduling.domain.models import ScheduleGenerationResult
 from scheduling.domain.models import SchedulingPolicy
+from scheduling.domain.replacement import prepare_generated_replacement
 
 SCHEDULING_SESSION_MANAGE = "scheduling.session.manage"
 SCHEDULING_GENERATE = "scheduling.generate"
@@ -39,11 +43,15 @@ class TimetableService:
         *,
         repository: SchedulingRepository,
         resources: SchedulingResourceDirectory,
+        references: SchedulingReferenceDirectory,
+        audit: SchedulingAuditSink,
         generator: SchedulingGenerator,
         entitlements: TimetableGenerationEntitlement | None = None,
     ) -> None:
         self._repository = repository
         self._resources = resources
+        self._references = references
+        self._audit = audit
         self._generator = generator
         self._entitlements = entitlements or _DisabledTimetableGeneration()
 
@@ -57,6 +65,10 @@ class TimetableService:
 
         _authorize(context, SCHEDULING_SESSION_MANAGE)
         _require_tenant(context, session.organization_id)
+        await self._require_session_references(
+            organization_id=context.organization_id,
+            sessions=(session,),
+        )
         existing = await self._repository.list_sessions(
             organization_id=context.organization_id
         )
@@ -74,9 +86,22 @@ class TimetableService:
         if conflicts:
             codes = ", ".join(conflict.code for conflict in conflicts)
             raise SchedulingConflictError(f"Session conflicts with: {codes}.")
-        await self._repository.save_session(
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.session.create.intent",
+            target_id=session.id,
+            outcome="intent_recorded",
+        )
+        await self._repository.save_conflict_free_session(
             session=session,
             expected_version=None,
+            constraints=constraints,
+        )
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.session.create.succeeded",
+            target_id=session.id,
+            outcome="succeeded",
         )
         return session
 
@@ -108,6 +133,10 @@ class TimetableService:
             ends_at=ends_at,
             version=current.version + 1,
         )
+        await self._require_session_references(
+            organization_id=context.organization_id,
+            sessions=(moved,),
+        )
         existing = tuple(
             session
             for session in await self._repository.list_sessions(
@@ -129,9 +158,22 @@ class TimetableService:
         if conflicts:
             codes = ", ".join(conflict.code for conflict in conflicts)
             raise SchedulingConflictError(f"Session conflicts with: {codes}.")
-        await self._repository.save_session(
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.session.move.intent",
+            target_id=moved.id,
+            outcome="intent_recorded",
+        )
+        await self._repository.save_conflict_free_session(
             session=moved,
             expected_version=current.version,
+            constraints=constraints,
+        )
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.session.move.succeeded",
+            target_id=moved.id,
+            outcome="succeeded",
         )
         return moved
 
@@ -161,9 +203,21 @@ class TimetableService:
             locked=locked,
             version=current.version + 1,
         )
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.session.lock.intent",
+            target_id=updated.id,
+            outcome="intent_recorded",
+        )
         await self._repository.save_session(
             session=updated,
             expected_version=current.version,
+        )
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.session.lock.succeeded",
+            target_id=updated.id,
+            outcome="succeeded",
         )
         return updated
 
@@ -182,6 +236,17 @@ class TimetableService:
         await self._require_generation_entitlement(context)
         if not candidate_slots:
             raise SchedulingRuleError("Schedule generation requires candidate slots.")
+        if any(
+            activity.organization_id != context.organization_id
+            for activity in activities
+        ) or any(
+            slot.organization_id != context.organization_id for slot in candidate_slots
+        ):
+            raise NotFoundError("Scheduling reference was not found.")
+        await self._require_activity_references(
+            organization_id=context.organization_id,
+            activities=activities,
+        )
         existing = await self._repository.list_sessions(
             organization_id=context.organization_id
         )
@@ -247,7 +312,7 @@ class TimetableService:
         proposed_sessions: tuple[ScheduledSession, ...],
         locked_session_ids: frozenset[UUID],
         expected_versions: dict[UUID, int],
-    ) -> None:
+    ) -> tuple[ScheduledSession, ...]:
         """Revalidate and atomically apply a version-bound generated proposal."""
 
         _authorize(context, SCHEDULING_APPLY_GENERATION)
@@ -261,27 +326,20 @@ class TimetableService:
             raise NotFoundError("Generated schedule was not found for this tenant.")
         if len({session.id for session in proposed_sessions}) != len(proposed_sessions):
             raise SchedulingRuleError("Generated proposal has duplicate sessions.")
+        await self._require_session_references(
+            organization_id=context.organization_id,
+            sessions=proposed_sessions,
+        )
         current = await self._repository.list_sessions(
             organization_id=context.organization_id
         )
-        current_by_id = {session.id: session for session in current}
-        current_versions = {session.id: session.version for session in current}
-        if current_versions != expected_versions:
-            raise ScheduleVersionConflictError(
-                "Timetable changed after schedule generation."
-            )
-        proposed_by_id = {session.id: session for session in proposed_sessions}
-        if not locked_session_ids.issubset(current_by_id):
-            raise ScheduleVersionConflictError(
-                "A locked timetable session no longer exists."
-            )
-        if any(
-            proposed_by_id.get(identifier) != current_by_id[identifier]
-            for identifier in locked_session_ids
-        ):
-            raise ScheduleVersionConflictError(
-                "Generated proposal changed a locked session."
-            )
+        prepare_generated_replacement(
+            organization_id=context.organization_id,
+            current_sessions=current,
+            proposed_sessions=proposed_sessions,
+            asserted_locked_session_ids=locked_session_ids,
+            expected_versions=expected_versions,
+        )
         constraints = await self._resources.constraint_context(
             organization_id=context.organization_id,
             starts_at=min(session.starts_at for session in proposed_sessions),
@@ -306,11 +364,108 @@ class TimetableService:
             raise SchedulingConflictError(
                 f"Generated proposal conflicts with: {codes}."
             )
-        await self._repository.replace_generated_schedule(
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.generation.apply.intent",
+            target_id=context.organization_id,
+            outcome="intent_recorded",
+        )
+        persisted = await self._repository.replace_generated_schedule(
             organization_id=context.organization_id,
             proposed_sessions=proposed_sessions,
             locked_session_ids=locked_session_ids,
             expected_versions=expected_versions,
+            constraints=constraints,
+        )
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.generation.apply.succeeded",
+            target_id=context.organization_id,
+            outcome="succeeded",
+        )
+        return persisted
+
+    async def _require_session_references(
+        self,
+        *,
+        organization_id: UUID,
+        sessions: tuple[ScheduledSession, ...],
+    ) -> None:
+        """Fail closed unless every external session reference exists in the tenant."""
+
+        requested = ExistingSchedulingReferences(
+            organization_id=organization_id,
+            room_ids=frozenset(session.room_id for session in sessions),
+            course_offering_ids=frozenset(
+                session.course_offering_id for session in sessions
+            ),
+            group_ids=frozenset(
+                group_id for session in sessions for group_id in session.group_ids
+            ),
+            teacher_ids=frozenset(
+                teacher_id for session in sessions for teacher_id in session.teacher_ids
+            ),
+        )
+        await self._require_exact_references(requested)
+
+    async def _require_activity_references(
+        self,
+        *,
+        organization_id: UUID,
+        activities: tuple[ActivityRequest, ...],
+    ) -> None:
+        """Fail closed unless every external generation reference exists."""
+
+        requested = ExistingSchedulingReferences(
+            organization_id=organization_id,
+            room_ids=frozenset(),
+            course_offering_ids=frozenset(
+                activity.course_offering_id for activity in activities
+            ),
+            group_ids=frozenset(
+                group_id for activity in activities for group_id in activity.group_ids
+            ),
+            teacher_ids=frozenset(
+                teacher_id
+                for activity in activities
+                for teacher_id in activity.teacher_ids
+            ),
+        )
+        await self._require_exact_references(requested)
+
+    async def _require_exact_references(
+        self,
+        requested: ExistingSchedulingReferences,
+    ) -> None:
+        """Compare exact matches without disclosing which tenant resource is absent."""
+
+        existing = await self._references.existing_references(
+            organization_id=requested.organization_id,
+            room_ids=requested.room_ids,
+            course_offering_ids=requested.course_offering_ids,
+            group_ids=requested.group_ids,
+            teacher_ids=requested.teacher_ids,
+        )
+        if existing != requested:
+            raise NotFoundError("Scheduling reference was not found.")
+
+    async def _record_mutation_event(
+        self,
+        *,
+        context: TenantActorContext,
+        action: str,
+        target_id: UUID,
+        outcome: str,
+    ) -> None:
+        """Append ordered mutation evidence through Scheduling's audit port."""
+
+        await self._audit.record_scheduling_event(
+            action=action,
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            target_id=target_id,
+            correlation_id=context.correlation_id,
+            outcome=outcome,
         )
 
     async def _require_generation_entitlement(

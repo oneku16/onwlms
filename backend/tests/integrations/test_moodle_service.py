@@ -3,6 +3,7 @@
 from uuid import UUID
 from uuid import uuid7
 
+import pytest
 from cryptography.fernet import Fernet
 
 from core.context import TenantActorContext
@@ -159,17 +160,24 @@ class RecordingGradeReceiver:
 class RecordingMoodleAuditSink:
     """Capture configuration evidence without configuration values."""
 
-    def __init__(self) -> None:
-        self.events: list[tuple[UUID, UUID, str]] = []
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.events: list[tuple[str, UUID, UUID, str, str]] = []
 
     async def record_moodle_configuration_event(
         self,
         *,
+        action: str,
         organization_id: UUID,
         actor_subject_id: UUID,
         correlation_id: str,
+        outcome: str,
     ) -> None:
-        self.events.append((organization_id, actor_subject_id, correlation_id))
+        if self.fail:
+            raise RuntimeError("audit unavailable")
+        self.events.append(
+            (action, organization_id, actor_subject_id, correlation_id, outcome)
+        )
 
 
 def _actor(organization_id: UUID) -> TenantActorContext:
@@ -207,7 +215,34 @@ async def test_configuration_encrypts_token_and_safe_status_omits_it() -> None:
     stored = repository.configurations[organization_id][1]
     assert stored != "secret-token"
     assert not hasattr(status, "token")
-    assert audit.events == [(organization_id, actor.subject_id, "test-correlation")]
+    assert [event[0] for event in audit.events] == [
+        "integrations.moodle.configuration_update_requested",
+        "integrations.moodle.configuration.updated",
+    ]
+    assert [event[4] for event in audit.events] == [
+        "intent_recorded",
+        "succeeded",
+    ]
+
+
+async def test_configuration_aborts_when_audit_intent_fails() -> None:
+    repository = InMemoryMoodleRepository()
+    service = MoodleIntegrationService(
+        repository=repository,
+        gateway_factory=UnusedGatewayFactory(),
+        grade_receiver=RecordingGradeReceiver(),
+        cipher=FieldCipher(Fernet.generate_key().decode("ascii")),
+        audit=RecordingMoodleAuditSink(fail=True),
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await service.configure(
+            actor=_actor(uuid7()),
+            base_url="https://moodle.example.edu",
+            token="secret-token",
+        )
+
+    assert repository.configurations == {}
 
 
 async def test_duplicate_grade_evidence_reaches_grading_policy_once() -> None:

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CourseSelectionForm } from "@/components/course-selection-form";
+import type { StudentCourseSelectionContext } from "@/lib/api/course-selection";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,6 +17,50 @@ describe("CourseSelectionForm", () => {
     const termId = "0198e706-a6d9-7b24-9156-7f92716f5f44";
     const offeringOne = "0198e706-a6d9-7b24-9156-7f92716f5f45";
     const offeringTwo = "0198e706-a6d9-7b24-9156-7f92716f5f46";
+    const context: StudentCourseSelectionContext = {
+      studentProfileId: "0198e706-a6d9-7b24-9156-7f92716f5f42",
+      enrollments: [
+        {
+          id: enrollmentId,
+          programId: "0198e706-a6d9-7b24-9156-7f92716f5f48",
+          programName: "Computer Science",
+          academicYearId: "0198e706-a6d9-7b24-9156-7f92716f5f49",
+          terms: [
+            {
+              id: termId,
+              name: "Autumn 2026",
+              startsOn: "2026-09-01",
+              endsOn: "2026-12-20",
+              deadline: "2026-08-30T18:00:00Z",
+              maximumCredits: "30.00",
+              approvalRequired: true,
+              offerings: [
+                {
+                  id: offeringOne,
+                  courseId: "0198e706-a6d9-7b24-9156-7f92716f5f50",
+                  courseCode: "CS101",
+                  courseTitle: "Programming I",
+                  sectionCode: "A",
+                  credits: "6.00",
+                  capacity: 30,
+                  meetingWindows: [],
+                },
+                {
+                  id: offeringTwo,
+                  courseId: "0198e706-a6d9-7b24-9156-7f92716f5f51",
+                  courseCode: "MATH101",
+                  courseTitle: "Discrete Mathematics",
+                  sectionCode: "B",
+                  credits: "6.00",
+                  capacity: 25,
+                  meetingWindows: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -25,7 +70,7 @@ describe("CourseSelectionForm", () => {
           offering_ids: [offeringOne, offeringTwo],
           requested_credits: "12.00",
           status: "pending",
-          override_reason: "Required course conflicts with the standard plan.",
+          override_reason: null,
           overridden_rules: ["schedule_conflict"],
           rejection_reason: null,
         }),
@@ -33,23 +78,16 @@ describe("CourseSelectionForm", () => {
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    render(<CourseSelectionForm canSubmit organizationId="org-1" />);
-
-    fireEvent.change(
-      screen.getByLabelText(/^Student academic enrollment UUID/),
-      { target: { value: enrollmentId } },
+    render(
+      <CourseSelectionForm
+        canSubmit
+        context={context}
+        organizationId="org-1"
+      />,
     );
-    fireEvent.change(screen.getByLabelText(/^Term UUID/), {
-      target: { value: termId },
-    });
-    fireEvent.change(screen.getByLabelText(/^Course offering UUIDs/), {
-      target: { value: ` ${offeringOne},\n${offeringTwo} ` },
-    });
-    fireEvent.change(screen.getByLabelText(/^Override reason/), {
-      target: {
-        value: "Required course conflicts with the standard plan.",
-      },
-    });
+
+    fireEvent.click(screen.getByLabelText(/CS101 · Programming I/));
+    fireEvent.click(screen.getByLabelText(/MATH101 · Discrete Mathematics/));
     fireEvent.click(
       screen.getByRole("button", { name: "Submit course selection" }),
     );
@@ -65,7 +103,6 @@ describe("CourseSelectionForm", () => {
       student_academic_enrollment_id: enrollmentId,
       term_id: termId,
       offering_ids: [offeringOne, offeringTwo],
-      override_reason: "Required course conflicts with the standard plan.",
     });
     expect(
       await screen.findByText(

@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+from collections.abc import AsyncIterator
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TypeVar
 from uuid import UUID
@@ -10,13 +12,17 @@ from uuid import UUID
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from academics.application.contracts import AcademicGradeTarget
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
+from academics.application.ports import CourseSelectionDecisionTransaction
+from academics.application.ports import CourseSelectionSubmissionTransaction
 from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
 from academics.domain.models import AcademicCalendarEvent
@@ -71,11 +77,21 @@ from academics.infrastructure.models import StudentAcademicEnrollmentModel
 from academics.infrastructure.models import TeacherAssignmentModel
 from academics.infrastructure.models import TermModel
 from core.errors import ConflictError
+from core.errors import NotFoundError
 from core.identifiers import new_uuid7
 from shared.database import Database
 
 ModelT = TypeVar("ModelT")
 DomainT = TypeVar("DomainT")
+
+
+def _term_grade_lock_key(*, organization_id: UUID, term_id: UUID) -> int:
+    """Derive the stable signed lock key shared with official grade writes."""
+
+    digest = hashlib.blake2b(digest_size=8, person=b"ownsis-termgrade")
+    digest.update(organization_id.bytes)
+    digest.update(term_id.bytes)
+    return int.from_bytes(digest.digest(), byteorder="big", signed=True)
 
 
 class SQLAlchemyAcademicRepository:
@@ -290,11 +306,24 @@ class SQLAlchemyAcademicRepository:
         organization_id: UUID,
         term_id: UUID,
     ) -> Term | None:
-        """Close an exact-tenant term idempotently under a row lock."""
+        """Close an exact-tenant term under its shared protocol and row lock."""
 
         async with self._database.session(
             organization_id=organization_id,
         ) as session:
+            acquired = await session.scalar(
+                text("SELECT pg_try_advisory_xact_lock(:lock_key)"),
+                {
+                    "lock_key": _term_grade_lock_key(
+                        organization_id=organization_id,
+                        term_id=term_id,
+                    )
+                },
+            )
+            if acquired is not True:
+                raise ConflictError(
+                    "Term grading state is being updated; retry the request."
+                )
             model = await session.scalar(
                 select(TermModel)
                 .where(
@@ -393,6 +422,7 @@ class SQLAlchemyAcademicRepository:
                         capacity=offering.capacity,
                     )
                 )
+                await session.flush()
                 for meeting in offering.meeting_windows:
                     session.add(
                         CourseOfferingMeetingModel(
@@ -567,16 +597,7 @@ class SQLAlchemyAcademicRepository:
                 StudentAcademicEnrollmentModel.organization_id == organization_id,
                 StudentAcademicEnrollmentModel.id == enrollment_id,
             ),
-            mapper=lambda model: StudentAcademicEnrollment(
-                id=model.id,
-                organization_id=model.organization_id,
-                student_id=model.student_id,
-                program_id=model.program_id,
-                academic_year_id=model.academic_year_id,
-                cohort_id=model.cohort_id,
-                status=AcademicEnrollmentStatus(model.status),
-                enrolled_at=model.enrolled_at,
-            ),
+            mapper=self._student_enrollment_from_model,
         )
 
     async def register_admissions_enrollment(
@@ -769,6 +790,7 @@ class SQLAlchemyAcademicRepository:
                         academic_year_id=curriculum.academic_year_id,
                     )
                     session.add(model)
+                    await session.flush()
                 elif model.id != curriculum.id:
                     raise ConflictError(
                         "Program-year curriculum identity cannot be replaced."
@@ -814,6 +836,7 @@ class SQLAlchemyAcademicRepository:
                             credits=course.credits,
                         )
                     )
+                    await session.flush()
                     for prerequisite_id in sorted(
                         course.prerequisite_course_ids,
                         key=str,
@@ -1459,6 +1482,35 @@ class SQLAlchemyAcademicRepository:
             )
             return stored_term_id is not None
 
+    async def admissions_target_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether a same-tenant target exists and its term remains open."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            stored_program_id = await session.scalar(
+                select(ProgramModel.id).where(
+                    ProgramModel.organization_id == organization_id,
+                    ProgramModel.id == program_id,
+                )
+            )
+            if stored_program_id is None:
+                return False
+            stored_open_term_id = await session.scalar(
+                select(TermModel.id).where(
+                    TermModel.organization_id == organization_id,
+                    TermModel.id == intake_id,
+                    TermModel.is_closed.is_(False),
+                )
+            )
+            return stored_open_term_id is not None
+
     async def get_grade_target(
         self,
         *,
@@ -1492,6 +1544,15 @@ class SQLAlchemyAcademicRepository:
                 )
             )
             if student_enrollment is None or offering is None:
+                return None
+            if student_enrollment.status != AcademicEnrollmentStatus.ACTIVE.value:
+                return None
+            # Completed course participation remains a legitimate finalization and
+            # revision target; withdrawal in either enrollment invalidates grading.
+            if enrollment.status not in {
+                CourseEnrollmentStatus.ENROLLED.value,
+                CourseEnrollmentStatus.COMPLETED.value,
+            }:
                 return None
             course = await session.scalar(
                 select(CourseModel).where(
@@ -1535,6 +1596,66 @@ class SQLAlchemyAcademicRepository:
                 )
             )
             return term.is_closed if term is not None else None
+
+    async def existing_scheduling_reference_ids(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        cohort_ids: frozenset[UUID],
+    ) -> AcademicSchedulingReferenceIds:
+        """Return requested Scheduling references from one tenant transaction."""
+
+        async with self._database.session(organization_id=organization_id) as session:
+            existing_rooms = (
+                frozenset(
+                    (
+                        await session.scalars(
+                            select(RoomModel.id).where(
+                                RoomModel.organization_id == organization_id,
+                                RoomModel.id.in_(room_ids),
+                            )
+                        )
+                    ).all()
+                )
+                if room_ids
+                else frozenset()
+            )
+            existing_offerings = (
+                frozenset(
+                    (
+                        await session.scalars(
+                            select(CourseOfferingModel.id).where(
+                                CourseOfferingModel.organization_id == organization_id,
+                                CourseOfferingModel.id.in_(course_offering_ids),
+                            )
+                        )
+                    ).all()
+                )
+                if course_offering_ids
+                else frozenset()
+            )
+            existing_cohorts = (
+                frozenset(
+                    (
+                        await session.scalars(
+                            select(CohortModel.id).where(
+                                CohortModel.organization_id == organization_id,
+                                CohortModel.id.in_(cohort_ids),
+                            )
+                        )
+                    ).all()
+                )
+                if cohort_ids
+                else frozenset()
+            )
+        return AcademicSchedulingReferenceIds(
+            organization_id=organization_id,
+            room_ids=existing_rooms,
+            course_offering_ids=existing_offerings,
+            cohort_ids=existing_cohorts,
+        )
 
     async def list_rooms(
         self,
@@ -1704,6 +1825,102 @@ class SQLAlchemyAcademicRepository:
                 model=model,
             )
 
+    @asynccontextmanager
+    async def submission_transaction(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID,
+    ) -> AsyncIterator[CourseSelectionSubmissionTransaction]:
+        """Lock one student aggregate through evaluation and submission."""
+
+        try:
+            async with self._database.session(
+                organization_id=organization_id
+            ) as session:
+                enrollment_model = await session.scalar(
+                    select(StudentAcademicEnrollmentModel)
+                    .where(
+                        StudentAcademicEnrollmentModel.organization_id
+                        == organization_id,
+                        StudentAcademicEnrollmentModel.id
+                        == student_academic_enrollment_id,
+                    )
+                    .with_for_update()
+                )
+                if enrollment_model is None:
+                    raise NotFoundError("Student academic enrollment was not found.")
+                yield _SQLAlchemyCourseSelectionTransaction(
+                    repository=self,
+                    session=session,
+                    organization_id=organization_id,
+                    student_enrollment=self._student_enrollment_from_model(
+                        enrollment_model
+                    ),
+                    request_model=None,
+                    request=None,
+                )
+        except IntegrityError as exc:
+            raise CourseSelectionError(
+                "Course selection conflicts with current enrollment state."
+            ) from exc
+
+    @asynccontextmanager
+    async def decision_transaction(
+        self,
+        *,
+        organization_id: UUID,
+        request_id: UUID,
+    ) -> AsyncIterator[CourseSelectionDecisionTransaction]:
+        """Lock one request and student aggregate through approval evaluation."""
+
+        try:
+            async with self._database.session(
+                organization_id=organization_id
+            ) as session:
+                request_model = await session.scalar(
+                    select(CourseSelectionRequestModel)
+                    .where(
+                        CourseSelectionRequestModel.organization_id == organization_id,
+                        CourseSelectionRequestModel.id == request_id,
+                    )
+                    .with_for_update()
+                )
+                if request_model is None:
+                    raise CourseSelectionDecisionError(
+                        "Course-selection request no longer exists."
+                    )
+                request = await self._selection_request_from_model(
+                    session=session,
+                    model=request_model,
+                )
+                enrollment_model = await session.scalar(
+                    select(StudentAcademicEnrollmentModel)
+                    .where(
+                        StudentAcademicEnrollmentModel.organization_id
+                        == organization_id,
+                        StudentAcademicEnrollmentModel.id
+                        == request.student_academic_enrollment_id,
+                    )
+                    .with_for_update()
+                )
+                if enrollment_model is None:
+                    raise NotFoundError("Student academic enrollment was not found.")
+                yield _SQLAlchemyCourseSelectionTransaction(
+                    repository=self,
+                    session=session,
+                    organization_id=organization_id,
+                    student_enrollment=self._student_enrollment_from_model(
+                        enrollment_model
+                    ),
+                    request_model=request_model,
+                    request=request,
+                )
+        except IntegrityError as exc:
+            raise CourseSelectionDecisionError(
+                "Course-selection decision conflicts with current state."
+            ) from exc
+
     async def save_submission(
         self,
         *,
@@ -1733,6 +1950,7 @@ class SQLAlchemyAcademicRepository:
                     offering_capacities=offering_capacities,
                 )
                 self._add_selection_request(session=session, request=request)
+                await session.flush()
                 for enrollment in enrollments:
                     session.add(self._course_enrollment_to_model(enrollment))
         except IntegrityError as exc:
@@ -1838,7 +2056,12 @@ class SQLAlchemyAcademicRepository:
     ) -> None:
         """Lock each offering and reject stale, full, or duplicate enrollment."""
 
-        for enrollment in enrollments:
+        # Stable lock ordering prevents overlapping multi-offering decisions from
+        # deadlocking merely because students selected offerings in another order.
+        for enrollment in sorted(
+            enrollments,
+            key=lambda value: str(value.course_offering_id),
+        ):
             offering = await session.scalar(
                 select(CourseOfferingModel)
                 .where(
@@ -2033,6 +2256,23 @@ class SQLAlchemyAcademicRepository:
         )
 
     @staticmethod
+    def _student_enrollment_from_model(
+        model: StudentAcademicEnrollmentModel,
+    ) -> StudentAcademicEnrollment:
+        """Translate a stored student academic enrollment."""
+
+        return StudentAcademicEnrollment(
+            id=model.id,
+            organization_id=model.organization_id,
+            student_id=model.student_id,
+            program_id=model.program_id,
+            academic_year_id=model.academic_year_id,
+            cohort_id=model.cohort_id,
+            status=AcademicEnrollmentStatus(model.status),
+            enrolled_at=model.enrolled_at,
+        )
+
+    @staticmethod
     def _course_enrollment_to_model(
         enrollment: CourseEnrollment,
     ) -> CourseEnrollmentModel:
@@ -2065,6 +2305,342 @@ class SQLAlchemyAcademicRepository:
             enrolled_at=model.enrolled_at,
             selection_request_id=model.selection_request_id,
         )
+
+
+class _SQLAlchemyCourseSelectionTransaction:
+    """Evaluate and persist one selection while exact aggregate locks are held."""
+
+    def __init__(
+        self,
+        *,
+        repository: SQLAlchemyAcademicRepository,
+        session: AsyncSession,
+        organization_id: UUID,
+        student_enrollment: StudentAcademicEnrollment,
+        request_model: CourseSelectionRequestModel | None,
+        request: CourseSelectionRequest | None,
+    ) -> None:
+        self._repository = repository
+        self._session = session
+        self._organization_id = organization_id
+        self._student_enrollment = student_enrollment
+        self._request_model = request_model
+        self._request = request
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the student enrollment protected by an exclusive row lock."""
+
+        return self._student_enrollment
+
+    @property
+    def request(self) -> CourseSelectionRequest:
+        """Return the request protected by an exclusive row lock."""
+
+        if self._request is None:
+            raise RuntimeError("A submission transaction has no existing request.")
+        return self._request
+
+    async def get_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> Term | None:
+        """Read and protect term closure state through transaction commit."""
+
+        self._require_tenant(organization_id)
+        model = await self._session.scalar(
+            select(TermModel)
+            .where(
+                TermModel.organization_id == organization_id,
+                TermModel.id == term_id,
+            )
+            .with_for_update(read=True)
+        )
+        if model is None:
+            return None
+        return Term(
+            id=model.id,
+            organization_id=model.organization_id,
+            academic_year_id=model.academic_year_id,
+            name=model.name,
+            starts_on=model.starts_on,
+            ends_on=model.ends_on,
+            enrollment_deadline=model.enrollment_deadline,
+            is_closed=model.is_closed,
+        )
+
+    async def get_course_offering(
+        self,
+        *,
+        organization_id: UUID,
+        offering_id: UUID,
+    ) -> CourseOffering | None:
+        """Read one complete offering in the active tenant transaction."""
+
+        self._require_tenant(organization_id)
+        model = await self._session.scalar(
+            select(CourseOfferingModel).where(
+                CourseOfferingModel.organization_id == organization_id,
+                CourseOfferingModel.id == offering_id,
+            )
+        )
+        if model is None:
+            return None
+        meetings = tuple(
+            (
+                await self._session.scalars(
+                    select(CourseOfferingMeetingModel)
+                    .where(
+                        CourseOfferingMeetingModel.organization_id == organization_id,
+                        CourseOfferingMeetingModel.course_offering_id == offering_id,
+                    )
+                    .order_by(CourseOfferingMeetingModel.id)
+                )
+            ).all()
+        )
+        return CourseOffering(
+            id=model.id,
+            organization_id=model.organization_id,
+            course_id=model.course_id,
+            term_id=model.term_id,
+            campus_id=model.campus_id,
+            section_code=model.section_code,
+            capacity=model.capacity,
+            meeting_windows=tuple(
+                MeetingWindow(
+                    weekday=meeting.weekday,
+                    starts_at=meeting.starts_at,
+                    ends_at=meeting.ends_at,
+                )
+                for meeting in meetings
+            ),
+        )
+
+    async def get_curriculum(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        academic_year_id: UUID,
+    ) -> ProgramCurriculum | None:
+        """Read one normalized curriculum inside the active transaction."""
+
+        self._require_tenant(organization_id)
+        model = await self._session.scalar(
+            select(ProgramCurriculumModel)
+            .where(
+                ProgramCurriculumModel.organization_id == organization_id,
+                ProgramCurriculumModel.program_id == program_id,
+                ProgramCurriculumModel.academic_year_id == academic_year_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            return None
+        course_models = tuple(
+            (
+                await self._session.scalars(
+                    select(CurriculumCourseModel)
+                    .where(
+                        CurriculumCourseModel.organization_id == organization_id,
+                        CurriculumCourseModel.curriculum_id == model.id,
+                    )
+                    .order_by(CurriculumCourseModel.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        course_model_ids = tuple(value.id for value in course_models)
+        prerequisites: tuple[CurriculumPrerequisiteModel, ...] = ()
+        if course_model_ids:
+            prerequisites = tuple(
+                (
+                    await self._session.scalars(
+                        select(CurriculumPrerequisiteModel)
+                        .where(
+                            CurriculumPrerequisiteModel.organization_id
+                            == organization_id,
+                            CurriculumPrerequisiteModel.curriculum_course_id.in_(
+                                course_model_ids
+                            ),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+        return ProgramCurriculum(
+            id=model.id,
+            organization_id=model.organization_id,
+            program_id=model.program_id,
+            academic_year_id=model.academic_year_id,
+            courses=tuple(
+                CurriculumCourse(
+                    course_id=course.course_id,
+                    kind=CurriculumCourseKind(course.kind),
+                    credits=course.credits,
+                    prerequisite_course_ids=frozenset(
+                        prerequisite.prerequisite_course_id
+                        for prerequisite in prerequisites
+                        if prerequisite.curriculum_course_id == course.id
+                    ),
+                )
+                for course in course_models
+            ),
+        )
+
+    async def get_selection_policy(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        term_id: UUID,
+    ) -> CourseSelectionPolicy | None:
+        """Read one selection policy inside the active transaction."""
+
+        self._require_tenant(organization_id)
+        model = await self._session.scalar(
+            select(CourseSelectionPolicyModel)
+            .where(
+                CourseSelectionPolicyModel.organization_id == organization_id,
+                CourseSelectionPolicyModel.program_id == program_id,
+                CourseSelectionPolicyModel.term_id == term_id,
+            )
+            .with_for_update(read=True)
+        )
+        if model is None:
+            return None
+        return CourseSelectionPolicy(
+            organization_id=model.organization_id,
+            program_id=model.program_id,
+            term_id=model.term_id,
+            education_mode=EducationMode(model.education_mode),
+            maximum_credits=model.maximum_credits,
+            deadline=model.deadline,
+            approval_required=model.approval_required,
+        )
+
+    async def list_course_enrollments(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Read the locked student's current official course enrollments."""
+
+        self._require_tenant(organization_id)
+        if student_academic_enrollment_id != self._student_enrollment.id:
+            raise NotFoundError("Student academic enrollment was not found.")
+        models = tuple(
+            (
+                await self._session.scalars(
+                    select(CourseEnrollmentModel).where(
+                        CourseEnrollmentModel.organization_id == organization_id,
+                        CourseEnrollmentModel.student_academic_enrollment_id
+                        == student_academic_enrollment_id,
+                    )
+                )
+            ).all()
+        )
+        return tuple(
+            sorted(
+                (
+                    self._repository._course_enrollment_from_model(model)
+                    for model in models
+                ),
+                key=lambda value: str(value.id),
+            )
+        )
+
+    async def save_submission(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Persist a submission in the active aggregate transaction."""
+
+        self._require_request_scope(request)
+        existing = await self._session.scalar(
+            select(CourseSelectionRequestModel.id).where(
+                CourseSelectionRequestModel.organization_id == request.organization_id,
+                CourseSelectionRequestModel.id == request.id,
+            )
+        )
+        if existing is not None:
+            raise ConflictError("Course-selection request already exists.")
+        await self._repository._check_and_lock_capacity(
+            session=self._session,
+            organization_id=request.organization_id,
+            enrollments=enrollments,
+            offering_capacities=offering_capacities,
+        )
+        self._repository._add_selection_request(
+            session=self._session,
+            request=request,
+        )
+        await self._session.flush()
+        for enrollment in enrollments:
+            self._session.add(self._repository._course_enrollment_to_model(enrollment))
+        await self._session.flush()
+
+    async def save_decision(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        approval: CourseSelectionApproval,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Persist a decision in the active aggregate transaction."""
+
+        self._require_request_scope(request)
+        request_model = self._request_model
+        if request_model is None or self.request.id != request.id:
+            raise CourseSelectionDecisionError(
+                "Course-selection request changed during decision."
+            )
+        if request_model.status != CourseSelectionStatus.PENDING.value:
+            raise CourseSelectionDecisionError(
+                "Course-selection request was already decided."
+            )
+        await self._repository._check_and_lock_capacity(
+            session=self._session,
+            organization_id=request.organization_id,
+            enrollments=enrollments,
+            offering_capacities=offering_capacities,
+        )
+        self._repository._apply_selection_request(
+            model=request_model,
+            request=request,
+        )
+        self._session.add(
+            CourseSelectionApprovalModel(
+                id=approval.id,
+                organization_id=approval.organization_id,
+                request_id=approval.request_id,
+                actor_id=approval.actor_id,
+                approved=approval.approved,
+                decided_at=approval.decided_at,
+                reason=approval.reason,
+            )
+        )
+        for enrollment in enrollments:
+            self._session.add(self._repository._course_enrollment_to_model(enrollment))
+        await self._session.flush()
+
+    def _require_tenant(self, organization_id: UUID) -> None:
+        if organization_id != self._organization_id:
+            raise NotFoundError("Course-selection state was not found.")
+
+    def _require_request_scope(self, request: CourseSelectionRequest) -> None:
+        self._require_tenant(request.organization_id)
+        if request.student_academic_enrollment_id != self._student_enrollment.id:
+            raise CourseSelectionDecisionError(
+                "Course-selection student enrollment changed during mutation."
+            )
 
 
 __all__ = ["SQLAlchemyAcademicRepository"]

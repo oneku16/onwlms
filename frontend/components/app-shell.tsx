@@ -9,6 +9,7 @@ import { clientApiRequest, readCsrfCookie } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import type { SessionView } from "@/lib/api/session";
 import { useCsrfProtection } from "@/lib/api/use-csrf";
+import { asRecord, asString, unwrapPayload } from "@/lib/api/validation";
 
 interface AppShellProps {
   readonly session: SessionView;
@@ -20,8 +21,27 @@ type BrandStyle = CSSProperties & {
   "--tenant-accent": string;
 };
 
-function parseNoContent(): null {
-  return null;
+interface LogoutResponse {
+  readonly providerLogoutUrl: string | null;
+}
+
+function parseLogout(value: unknown): LogoutResponse {
+  const record = asRecord(unwrapPayload(value));
+  if (!record || record.logged_out !== true) {
+    throw new Error("The logout response is not supported.");
+  }
+  if (record.provider_logout_url === null) {
+    return { providerLogoutUrl: null };
+  }
+  const providerLogoutUrl = asString(record.provider_logout_url);
+  if (!providerLogoutUrl) {
+    throw new Error("The logout response is not supported.");
+  }
+  const parsed = new URL(providerLogoutUrl);
+  if (parsed.protocol !== "https:") {
+    throw new Error("The provider logout URL is not secure.");
+  }
+  return { providerLogoutUrl };
 }
 
 export function AppShell({ session, children }: AppShellProps) {
@@ -41,9 +61,17 @@ export function AppShell({ session, children }: AppShellProps) {
     setLoggingOut(true);
     setLogoutError(null);
     try {
-      await clientApiRequest("/api/v1/auth/logout", parseNoContent, {
-        method: "POST",
-      });
+      const result = await clientApiRequest(
+        "/api/v1/auth/logout",
+        parseLogout,
+        {
+          method: "POST",
+        },
+      );
+      if (result.providerLogoutUrl) {
+        window.location.assign(result.providerLogoutUrl);
+        return;
+      }
       router.replace("/sign-in");
       router.refresh();
     } catch (error) {

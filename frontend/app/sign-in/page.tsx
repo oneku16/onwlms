@@ -24,8 +24,8 @@ export default function SignInPage() {
         </p>
         <SignInForm />
         <p className="security-note">
-          OwnSIS keeps identity-provider tokens on the server and uses secure
-          cookies for the browser session.
+          OwnSIS keeps provider access and refresh tokens on the server and uses
+          secure cookies for the browser session.
         </p>
       </section>
     </main>

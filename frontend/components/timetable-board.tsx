@@ -70,32 +70,75 @@ function dateTimeParts(
   };
 }
 
-function offsetSuffix(isoValue: string): string {
-  return isoValue.match(/(Z|[+-]\d{2}:\d{2})$/)?.[1] ?? "Z";
-}
-
 function movedDateTimes(
   session: ScheduleSession,
   date: string,
   time: string,
+  timezone: string,
 ): { startsAt: string; endsAt: string } {
-  const suffix = offsetSuffix(session.startsAt);
-  const startsAt = new Date(`${date}T${time}:00${suffix}`);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(
+    `${date}T${time}`,
+  );
+  if (!match) {
+    throw new Error("The timetable target is invalid.");
+  }
+  const desired = {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+  };
+  const desiredAsUtc = Date.UTC(
+    desired.year,
+    desired.month - 1,
+    desired.day,
+    desired.hour,
+    desired.minute,
+  );
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  let candidate = desiredAsUtc;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = formatter.formatToParts(new Date(candidate));
+    const part = (type: Intl.DateTimeFormatPartTypes): number =>
+      Number(parts.find((entry) => entry.type === type)?.value ?? Number.NaN);
+    const representedAsUtc = Date.UTC(
+      part("year"),
+      part("month") - 1,
+      part("day"),
+      part("hour"),
+      part("minute"),
+    );
+    candidate += desiredAsUtc - representedAsUtc;
+  }
+  const represented = Object.fromEntries(
+    formatter
+      .formatToParts(new Date(candidate))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
+  );
+  if (
+    represented.year !== desired.year ||
+    represented.month !== desired.month ||
+    represented.day !== desired.day ||
+    represented.hour !== desired.hour ||
+    represented.minute !== desired.minute
+  ) {
+    throw new Error("The timetable target does not exist in this timezone.");
+  }
+  const startsAt = new Date(candidate);
   const duration =
     new Date(session.endsAt).getTime() - new Date(session.startsAt).getTime();
   const endsAt = new Date(startsAt.getTime() + Math.max(duration, 30 * 60_000));
   return { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() };
-}
-
-function commaSeparatedIdentifiers(value: FormDataEntryValue | null): string[] {
-  return String(value ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function utcDateTime(value: FormDataEntryValue | null): string {
-  return `${String(value ?? "").trim()}:00Z`;
 }
 
 function replaceSession(
@@ -165,79 +208,9 @@ export function TimetableBoard({
   const dates = useMemo(() => weekDates(weekStart), [weekStart]);
   const editable = canEdit && csrfAvailable && !saving;
 
-  async function createSession(
-    event: FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    if (!csrfAvailable) {
-      return;
-    }
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const recurrenceUntil = String(form.get("recurrenceUntil") ?? "").trim();
-    setSaving(true);
-    setFeedback("Creating timetable session…");
-    setConflicts([]);
-    try {
-      const created = await clientApiRequest(
-        "/api/v1/scheduling/sessions",
-        parseScheduleSession,
-        {
-          method: "POST",
-          organizationId,
-          body: {
-            activity_id: String(form.get("activityId") ?? "").trim(),
-            course_offering_id: String(
-              form.get("courseOfferingId") ?? "",
-            ).trim(),
-            room_id: String(form.get("roomId") ?? "").trim(),
-            teacher_ids: commaSeparatedIdentifiers(form.get("teacherIds")),
-            group_ids: commaSeparatedIdentifiers(form.get("groupIds")),
-            required_group_ids: commaSeparatedIdentifiers(
-              form.get("requiredGroupIds"),
-            ),
-            starts_at: utcDateTime(form.get("startsAt")),
-            ends_at: utcDateTime(form.get("endsAt")),
-            activity_type: String(form.get("activityType") ?? "").trim(),
-            required_room_type: String(
-              form.get("requiredRoomType") ?? "",
-            ).trim(),
-            expected_attendance: Number(form.get("expectedAttendance") ?? 0),
-            recurrence: recurrenceUntil
-              ? {
-                  interval_weeks: Number(form.get("intervalWeeks") ?? 1),
-                  until: utcDateTime(recurrenceUntil),
-                }
-              : null,
-          },
-        },
-      );
-      setSessions((current) => [...current, created]);
-      setSelectedId(created.id);
-      setFeedback(`${created.title} created successfully.`);
-      formElement.reset();
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 409) {
-        const reported = parseScheduleConflicts(caught.details);
-        setConflicts(
-          reported.length > 0
-            ? reported
-            : [{ code: caught.code, message: caught.message }],
-        );
-      }
-      setFeedback(
-        caught instanceof ApiError
-          ? caught.message
-          : "The timetable session could not be created.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function toggleSelectedLock(): Promise<void> {
     const current = sessions.find((session) => session.id === selectedId);
-    if (!current || current.version === null || !csrfAvailable) {
+    if (!current || !csrfAvailable) {
       return;
     }
     setSaving(true);
@@ -277,7 +250,15 @@ export function TimetableBoard({
       return;
     }
     const previous = sessions;
-    const moved = movedDateTimes(current, targetDate, targetTime);
+    let moved: { startsAt: string; endsAt: string };
+    try {
+      moved = movedDateTimes(current, targetDate, targetTime, timezone);
+    } catch {
+      setFeedback(
+        "That local timetable slot cannot be represented in the organization timezone.",
+      );
+      return;
+    }
     const optimistic: ScheduleSession = {
       ...current,
       startsAt: moved.startsAt,
@@ -373,88 +354,21 @@ export function TimetableBoard({
         </p>
       ) : null}
 
-      <details className="form-card timetable-create">
-        <summary>Create a manual session</summary>
+      <section className="form-card timetable-create">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Authoritative context required</p>
+            <h2>Manual session creation is unavailable</h2>
+          </div>
+        </div>
         <p>
-          Enter module-owned identifiers from the academic and people
-          directories. Times are explicit UTC; the board displays them in{" "}
-          {timezone}.
+          The portal will not accept pasted scheduling identifiers. Manual
+          creation remains disabled until an authoritative activity catalog can
+          supply the activity, offering, room, teacher, and group choices
+          together. Existing sessions can still be moved and locked through the
+          verified organization context.
         </p>
-        <form onSubmit={(event) => void createSession(event)}>
-          <div className="form-grid">
-            <label>
-              Activity ID
-              <input name="activityId" required autoComplete="off" />
-            </label>
-            <label>
-              Course offering ID
-              <input name="courseOfferingId" required autoComplete="off" />
-            </label>
-            <label>
-              Room ID
-              <input name="roomId" required autoComplete="off" />
-            </label>
-            <label>
-              Teacher profile IDs (comma-separated)
-              <input name="teacherIds" required autoComplete="off" />
-            </label>
-            <label>
-              Group IDs (comma-separated, optional)
-              <input name="groupIds" autoComplete="off" />
-            </label>
-            <label>
-              Required group IDs (comma-separated, optional)
-              <input name="requiredGroupIds" autoComplete="off" />
-            </label>
-            <label>
-              Starts at (UTC)
-              <input name="startsAt" type="datetime-local" required />
-            </label>
-            <label>
-              Ends at (UTC)
-              <input name="endsAt" type="datetime-local" required />
-            </label>
-            <label>
-              Activity type
-              <input name="activityType" required maxLength={64} />
-            </label>
-            <label>
-              Required room type
-              <input name="requiredRoomType" required maxLength={64} />
-            </label>
-            <label>
-              Expected attendance
-              <input
-                name="expectedAttendance"
-                type="number"
-                min="1"
-                step="1"
-                required
-              />
-            </label>
-            <label>
-              Repeat every weeks
-              <input
-                name="intervalWeeks"
-                type="number"
-                min="1"
-                max="52"
-                step="1"
-                defaultValue="1"
-              />
-            </label>
-            <label className="form-span">
-              Recurrence through (UTC, optional)
-              <input name="recurrenceUntil" type="datetime-local" />
-            </label>
-          </div>
-          <div className="form-actions">
-            <button className="button" type="submit" disabled={!editable}>
-              {saving ? "Saving…" : "Create session"}
-            </button>
-          </div>
-        </form>
-      </details>
+      </section>
 
       <form className="keyboard-move" onSubmit={keyboardMove}>
         <div>

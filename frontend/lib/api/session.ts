@@ -28,6 +28,7 @@ export interface ActorView {
 export interface CurrentIdentityView {
   readonly actor: ActorView;
   readonly isPlatformAdmin: boolean;
+  readonly permissions: readonly string[];
   readonly expiresAt: string;
 }
 
@@ -50,6 +51,7 @@ export interface MembershipDiscoveryView {
   readonly id: string;
   readonly organizationId: string;
   readonly roles: readonly Role[];
+  readonly permissions: readonly string[];
 }
 
 export interface MembershipView extends MembershipDiscoveryView {
@@ -65,110 +67,6 @@ export interface SessionView {
   readonly permissions: readonly string[];
   readonly entitlements: readonly string[];
 }
-
-const tenantAdministratorPermissions = [
-  "organizations.read",
-  "organizations.configure",
-  "organizations.campuses.manage",
-  "people.read",
-  "people.manage",
-  "people.memberships.manage",
-  "people.guardians.manage",
-  "academics.structure.manage",
-  "academics.term.close",
-  "academics.curriculum.manage",
-  "academics.enrollment.manage",
-  "academics.course_selection.submit",
-  "academics.course_selection.approve",
-  "academics.course_selection.override",
-  "admissions.application.create",
-  "admissions.application.submit",
-  "admissions.document.manage",
-  "admissions.review",
-  "admissions.decision.manage",
-  "admissions.policy.manage",
-  "admissions.application.enroll",
-  "grading.scale.manage",
-  "grading.final_grade.record",
-  "grading.final_grade.revise",
-  "grading.transcript.read",
-  "scheduling.session.manage",
-  "scheduling.generate",
-  "scheduling.generation.apply",
-  "scheduling.read",
-  "integrations.configure",
-  "integrations.read",
-  "provisioning.read",
-  "provisioning.retry",
-  "entitlements.read",
-  "audit.read",
-  "notifications.read_own",
-  "notifications.preferences.manage_own",
-  "notifications.delivery.retry_own",
-] as const;
-
-const rolePermissions: Readonly<Record<Role, readonly string[]>> = {
-  PlatformAdmin: [
-    "organizations.platform.create",
-    "organizations.platform.lifecycle",
-    "people.platform.appoint_owner",
-    "entitlements.platform.manage",
-    "audit.platform.read",
-  ],
-  OrganizationOwner: [
-    ...tenantAdministratorPermissions,
-    "grading.final_grade.revise_closed_term",
-  ],
-  OrganizationAdmin: tenantAdministratorPermissions,
-  Student: [
-    "organizations.read",
-    "academics.student.read_own",
-    "academics.course_selection.submit",
-    "grading.student.read_own",
-    "scheduling.student.read_own",
-    "integrations.moodle_deadlines.read_own",
-    "entitlements.read",
-    "notifications.read_own",
-    "notifications.preferences.manage_own",
-    "notifications.delivery.retry_own",
-  ],
-  Teacher: [
-    "organizations.read",
-    "academics.teacher.read_assigned",
-    "scheduling.teacher.read_own",
-    "integrations.grade_sync.read_assigned",
-    "integrations.moodle_deadlines.read_own",
-    "entitlements.read",
-    "notifications.read_own",
-    "notifications.preferences.manage_own",
-    "notifications.delivery.retry_own",
-  ],
-  Guardian: [
-    "organizations.read",
-    "academics.guardian.read_linked",
-    "grading.guardian.read_linked",
-    "entitlements.read",
-    "notifications.read_own",
-    "notifications.preferences.manage_own",
-    "notifications.delivery.retry_own",
-  ],
-  Staff: [
-    "organizations.read",
-    "people.read",
-    "scheduling.read",
-    "entitlements.read",
-    "notifications.read_own",
-    "notifications.preferences.manage_own",
-    "notifications.delivery.retry_own",
-  ],
-  Guest: [
-    "organizations.read",
-    "entitlements.read",
-    "notifications.read_own",
-    "notifications.preferences.manage_own",
-    "notifications.delivery.retry_own",
-  ],
-};
 
 export const anonymousSession: SessionView = Object.freeze({
   authenticated: false,
@@ -232,6 +130,10 @@ export function parseCurrentIdentity(value: unknown): CurrentIdentityView {
   if (isPlatformAdmin === undefined) {
     throw new Error("Invalid identity response.");
   }
+  if (!Array.isArray(record.permissions)) {
+    throw new Error("Invalid identity response.");
+  }
+  const permissions = asStringArray(record.permissions);
   const email = asString(record.email);
   return {
     actor: {
@@ -240,6 +142,7 @@ export function parseCurrentIdentity(value: unknown): CurrentIdentityView {
       ...(email === undefined ? {} : { email }),
     },
     isPlatformAdmin,
+    permissions,
     expiresAt,
   };
 }
@@ -258,8 +161,12 @@ export function parseMembershipDiscoveries(
     const id = asString(record.id);
     const organizationId = asString(record.organization_id);
     const parsedRoles = parseRoles(record.roles);
+    if (!Array.isArray(record.permissions)) {
+      throw new Error("Invalid memberships response.");
+    }
+    const permissions = asStringArray(record.permissions);
     return id && organizationId && parsedRoles.length > 0
-      ? [{ id, organizationId, roles: parsedRoles }]
+      ? [{ id, organizationId, roles: parsedRoles, permissions }]
       : [];
   });
 }
@@ -320,7 +227,10 @@ export function composeSession(
     memberships,
     roles: currentRoles,
     permissions: [
-      ...new Set(currentRoles.flatMap((role) => rolePermissions[role])),
+      ...new Set([
+        ...identity.permissions,
+        ...(activeMembership?.permissions ?? []),
+      ]),
     ],
     entitlements: [...new Set(entitlements)],
   };

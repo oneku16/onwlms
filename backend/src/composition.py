@@ -63,6 +63,7 @@ from people.composition import install_people_routes
 from people.infrastructure.read_repository import (
     SQLAlchemyPeopleOwnershipReadRepository,
 )
+from people_adapters import PeopleAcademicProfileAdapter
 from people_adapters import PeopleSchedulingTeacherAdapter
 from profile_activation_adapter import SQLAlchemyAcceptedStudentRegistrationWriter
 from profile_activation_adapter import SQLAlchemyProfileActivationWriter
@@ -90,6 +91,7 @@ def create_application(
         settings=app_settings,
         database=app_database,
         audit=audit_sink,
+        platform_audit=audit_sink,
     )
     organization_service = create_organization_service(
         database=app_database,
@@ -107,6 +109,7 @@ def create_application(
     )
     entitlement_service = create_entitlement_service(
         database=app_database,
+        organizations=organization_service,
         audit=audit_sink,
     )
     people_ownership = PeopleOwnershipReadService(
@@ -116,14 +119,17 @@ def create_application(
         ),
         memberships=people.memberships,
     )
+    scheduling_teachers = PeopleSchedulingTeacherAdapter(people.references)
     teacher_availability = create_teacher_availability_service(
         database=app_database,
-        teachers=PeopleSchedulingTeacherAdapter(people.references),
+        teachers=scheduling_teachers,
+        audit=audit_sink,
     )
 
     academic_services = create_academic_services(
         database=app_database,
         campuses=organization_service,
+        profiles=PeopleAcademicProfileAdapter(people.references),
         audit=audit_sink,
         ownership=CourseSelectionStudentOwnershipAdapter(people_ownership),
     )
@@ -133,17 +139,22 @@ def create_application(
         terms=AcademicTermClosureAdapter(academic_services.references),
         audit=audit_sink,
     )
+    scheduling_resources = AcademicSchedulingResourceAdapter(
+        academic_services.references,
+        teacher_availability,
+        scheduling_teachers,
+    )
     timetable_service = create_timetable_service(
         database=app_database,
-        resources=AcademicSchedulingResourceAdapter(
-            academic_services.references,
-            teacher_availability,
-        ),
+        resources=scheduling_resources,
+        references=scheduling_resources,
+        audit=audit_sink,
         entitlements=TimetableGenerationEntitlementAdapter(entitlement_service),
     )
     admissions_service = create_admissions_service(
         database=app_database,
         pii_encryption_key=app_settings.PII_ENCRYPTION_KEY,
+        audit=audit_sink,
         targets=AdmissionsAcademicTargetAdapter(academic_services.references),
         registrar=ModuleOwnedAcceptedApplicantEnrollmentRegistrar(
             people=AcceptedStudentRegistrationService(
@@ -201,7 +212,11 @@ def create_application(
     app.state.notification_service = notification_service
     app.state.provisioning_service = provisioning_service
 
-    install_identity_routes(app=app, service=identity.service)
+    install_identity_routes(
+        app=app,
+        service=identity.service,
+        platform_administration=identity.platform_administration,
+    )
     install_organization_routes(app=app, service=organization_service)
     install_people_routes(app=app, resources=people)
     install_entitlement_routes(app=app, service=entitlement_service)

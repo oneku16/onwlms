@@ -11,8 +11,10 @@ from academics.application import AcademicAdministrationService
 from academics.application import AcademicCatalogRepository
 from academics.application import AcademicGradeTarget
 from academics.application import AcademicInstructionWindow
+from academics.application import AcademicProfileDirectory
 from academics.application import AcademicReferenceRepository
 from academics.application import AcademicReferenceService
+from academics.application import AcademicSchedulingReferenceIds
 from academics.application import AcademicSchedulingReferences
 from academics.application import AcademicSchedulingRoom
 from academics.application import CampusDirectory
@@ -36,8 +38,10 @@ __all__ = [
     "AcademicCatalogRepository",
     "AcademicGradeTarget",
     "AcademicInstructionWindow",
+    "AcademicProfileDirectory",
     "AcademicReferenceRepository",
     "AcademicReferenceService",
+    "AcademicSchedulingReferenceIds",
     "AcademicSchedulingReferences",
     "AcademicSchedulingRoom",
     "CampusDirectory",

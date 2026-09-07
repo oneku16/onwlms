@@ -62,6 +62,15 @@ function parseResource(
     (typeof record.configured === "boolean" && "base_url" in record
       ? "Moodle integration"
       : undefined) ??
+    (record.action !== undefined && record.entity_type !== undefined
+      ? `${String(record.action)} · ${String(record.entity_type)}`
+      : undefined) ??
+    (record.target !== undefined && record.subject_type !== undefined
+      ? `${String(record.target)} provisioning`
+      : undefined) ??
+    (record.code !== undefined && record.room_type !== undefined
+      ? `${String(record.code)} · ${String(record.room_type)}`
+      : undefined) ??
     (record.section_id !== undefined
       ? `Section ${String(record.section_id)}`
       : undefined);
@@ -94,7 +103,12 @@ function parseResource(
       "seat_category",
       "base_url",
       "requested_credits",
+      "entity_id",
+      "subject_type",
     ]) ??
+    (record.capacity !== undefined
+      ? `Capacity ${String(record.capacity)}`
+      : undefined) ??
     (record.credits_earned !== undefined
       ? `${String(record.credits_earned)} credits earned`
       : undefined);
@@ -107,7 +121,12 @@ function parseResource(
       : undefined);
   const code = asString(record.code);
   const updatedAt = readFirstString(record, ["updated_at", "updatedAt"]);
-  const occursAt = readFirstString(record, ["starts_at", "due_at"]);
+  const occursAt = readFirstString(record, [
+    "starts_at",
+    "due_at",
+    "occurred_at",
+    "created_at",
+  ]);
   return {
     id,
     title,
@@ -139,10 +158,13 @@ function findItems(payload: unknown): readonly unknown[] {
 export function parseResourceCollection(value: unknown): ResourceCollection {
   const payload = unwrapPayload(value);
   const payloadRecord = asRecord(payload);
-  const items = findItems(payload).flatMap((entry, index) => {
+  const items = findItems(payload).map((entry, index) => {
     const record = asRecord(entry);
     const parsed = record ? parseResource(record, index) : undefined;
-    return parsed === undefined ? [] : [parsed];
+    if (!parsed) {
+      throw new Error("The resource collection response is not supported.");
+    }
+    return parsed;
   });
   const total =
     asNumber(payloadRecord?.total) ??
@@ -166,38 +188,42 @@ export function parseGuardianGradeCollection(
   const items = findItems(unwrapPayload(value)).flatMap((entry) => {
     const student = asRecord(entry);
     if (!student) {
-      return [];
+      throw new Error("The guardian grade response is not supported.");
     }
     const studentId = asString(student.student_person_id);
     const studentName = asString(student.display_name);
-    const grades = Array.isArray(student.latest_official_grades)
-      ? student.latest_official_grades
-      : [];
-    if (!studentId || !studentName) {
-      return [];
+    if (
+      !studentId ||
+      !studentName ||
+      !Array.isArray(student.latest_official_grades)
+    ) {
+      throw new Error("The guardian grade response is not supported.");
     }
-    return grades.flatMap((gradeEntry, index) => {
+    return student.latest_official_grades.map((gradeEntry, index) => {
       const grade = asRecord(gradeEntry);
       const courseCode = asString(grade?.course_code);
       const courseTitle = asString(grade?.course_title);
       const displayGrade = asString(grade?.display_grade);
-      if (!courseCode || !courseTitle || !displayGrade) {
-        return [];
-      }
       const creditsAttempted = asString(grade?.credits_attempted);
       const creditsEarned = asString(grade?.credits_earned);
-      const creditSummary =
-        creditsAttempted && creditsEarned
-          ? `${creditsEarned}/${creditsAttempted} credits earned`
-          : undefined;
-      return [
-        {
-          id: `${studentId}:${courseCode}:${index}`,
-          title: `${courseCode} · ${courseTitle}`,
-          subtitle: [studentName, creditSummary].filter(Boolean).join(" · "),
-          status: displayGrade,
-        },
-      ];
+      if (
+        !courseCode ||
+        !courseTitle ||
+        !displayGrade ||
+        !creditsAttempted ||
+        !creditsEarned ||
+        (grade?.grade_points !== null &&
+          asString(grade?.grade_points) === undefined)
+      ) {
+        throw new Error("The guardian grade response is not supported.");
+      }
+      const creditSummary = `${creditsEarned}/${creditsAttempted} credits earned`;
+      return {
+        id: `${studentId}:${courseCode}:${index}`,
+        title: `${courseCode} · ${courseTitle}`,
+        subtitle: [studentName, creditSummary].filter(Boolean).join(" · "),
+        status: displayGrade,
+      };
     });
   });
   return { items, total: items.length };

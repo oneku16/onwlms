@@ -7,6 +7,7 @@ from uuid import UUID
 from core.context import TenantActorContext
 from core.errors import AuthorizationError
 from core.errors import NotFoundError
+from scheduling.application.ports import SchedulingAuditSink
 from scheduling.application.ports import TeacherAvailabilityRepository
 from scheduling.application.ports import TeacherReferenceDirectory
 from scheduling.application.service import SCHEDULING_READ
@@ -27,9 +28,11 @@ class TeacherAvailabilityService:
         self,
         repository: TeacherAvailabilityRepository,
         teachers: TeacherReferenceDirectory,
+        audit: SchedulingAuditSink,
     ) -> None:
         self._repository = repository
         self._teachers = teachers
+        self._audit = audit
 
     async def create_window(
         self,
@@ -48,7 +51,19 @@ class TeacherAvailabilityService:
         )
         if window.teacher_id not in existing_teacher_ids:
             raise NotFoundError("Teacher profile was not found.")
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.teacher_availability.create.intent",
+            target_id=window.id,
+            outcome="intent_recorded",
+        )
         await self._repository.create_window(window)
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.teacher_availability.create.succeeded",
+            target_id=window.id,
+            outcome="succeeded",
+        )
         return window
 
     async def delete_window(
@@ -60,12 +75,24 @@ class TeacherAvailabilityService:
         """Delete one exact tenant-owned availability window."""
 
         _authorize(context, SCHEDULING_SESSION_MANAGE)
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.teacher_availability.delete.intent",
+            target_id=window_id,
+            outcome="intent_recorded",
+        )
         deleted = await self._repository.delete_window(
             organization_id=context.organization_id,
             window_id=window_id,
         )
         if not deleted:
             raise NotFoundError("Teacher availability window was not found.")
+        await self._record_mutation_event(
+            context=context,
+            action="scheduling.teacher_availability.delete.succeeded",
+            target_id=window_id,
+            outcome="succeeded",
+        )
 
     async def list_windows(
         self,
@@ -137,6 +164,25 @@ class TeacherAvailabilityService:
                 ),
             )
             for teacher_id in sorted(teacher_ids, key=str)
+        )
+
+    async def _record_mutation_event(
+        self,
+        *,
+        context: TenantActorContext,
+        action: str,
+        target_id: UUID,
+        outcome: str,
+    ) -> None:
+        """Append ordered availability mutation evidence through the audit port."""
+
+        await self._audit.record_scheduling_event(
+            action=action,
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            target_id=target_id,
+            correlation_id=context.correlation_id,
+            outcome=outcome,
         )
 
 

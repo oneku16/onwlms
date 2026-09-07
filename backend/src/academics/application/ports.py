@@ -1,10 +1,12 @@
 """Application-owned academic persistence and collaboration contracts."""
 
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from academics.application.contracts import AcademicGradeTarget
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
 from academics.domain.models import AcademicCalendarEvent
@@ -38,6 +40,28 @@ class CampusDirectory(Protocol):
         campus_id: UUID,
     ) -> bool:
         """Return whether the campus exists inside the requested tenant."""
+        ...
+
+
+class AcademicProfileDirectory(Protocol):
+    """Validate People-owned academic profile references by type and tenant."""
+
+    async def teacher_profile_exists(
+        self,
+        *,
+        organization_id: UUID,
+        teacher_profile_id: UUID,
+    ) -> bool:
+        """Return whether the identifier is a teacher in the exact tenant."""
+        ...
+
+    async def student_profile_exists(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_id: UUID,
+    ) -> bool:
+        """Return whether the identifier is a student in the exact tenant."""
         ...
 
 
@@ -352,7 +376,114 @@ class AcademicCatalogRepository(Protocol):
         ...
 
 
-class CourseSelectionRepository(Protocol):
+class CourseSelectionEvaluationCatalog(Protocol):
+    """Read the current catalog facts required to evaluate one selection."""
+
+    async def get_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> Term | None:
+        """Return one exact-tenant term."""
+        ...
+
+    async def get_course_offering(
+        self,
+        *,
+        organization_id: UUID,
+        offering_id: UUID,
+    ) -> CourseOffering | None:
+        """Return one complete exact-tenant offering."""
+        ...
+
+    async def get_curriculum(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        academic_year_id: UUID,
+    ) -> ProgramCurriculum | None:
+        """Return one current program-year curriculum."""
+        ...
+
+    async def get_selection_policy(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        term_id: UUID,
+    ) -> CourseSelectionPolicy | None:
+        """Return one current program-term selection policy."""
+        ...
+
+
+class CourseSelectionEnrollmentReader(Protocol):
+    """Read current official enrollments for selection evaluation."""
+
+    async def list_course_enrollments(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Return official course enrollments inside one tenant."""
+        ...
+
+
+class CourseSelectionSubmissionTransaction(
+    CourseSelectionEvaluationCatalog,
+    CourseSelectionEnrollmentReader,
+    Protocol,
+):
+    """Hold one student enrollment lock through submission evaluation and save."""
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the exact locked student academic enrollment."""
+        ...
+
+    async def save_submission(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Save the evaluated submission in the active transaction."""
+        ...
+
+
+class CourseSelectionDecisionTransaction(
+    CourseSelectionEvaluationCatalog,
+    CourseSelectionEnrollmentReader,
+    Protocol,
+):
+    """Hold request and student locks through decision evaluation and save."""
+
+    @property
+    def request(self) -> CourseSelectionRequest:
+        """Return the exact locked selection request."""
+        ...
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the exact locked student academic enrollment."""
+        ...
+
+    async def save_decision(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        approval: CourseSelectionApproval,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Save the evaluated decision in the active transaction."""
+        ...
+
+
+class CourseSelectionRepository(CourseSelectionEnrollmentReader, Protocol):
     """Persist selection aggregates with atomic enrollment finalization."""
 
     async def list_selection_requests(
@@ -366,13 +497,22 @@ class CourseSelectionRepository(Protocol):
         """Return a bounded stable page of tenant selection requests."""
         ...
 
-    async def list_course_enrollments(
+    def submission_transaction(
         self,
         *,
         organization_id: UUID,
         student_academic_enrollment_id: UUID,
-    ) -> tuple[CourseEnrollment, ...]:
-        """Return official course enrollments inside one tenant."""
+    ) -> AbstractAsyncContextManager[CourseSelectionSubmissionTransaction]:
+        """Serialize one student's evaluation and submission mutation."""
+        ...
+
+    def decision_transaction(
+        self,
+        *,
+        organization_id: UUID,
+        request_id: UUID,
+    ) -> AbstractAsyncContextManager[CourseSelectionDecisionTransaction]:
+        """Serialize one pending request and its student aggregate decision."""
         ...
 
     async def get_selection_request(
@@ -382,27 +522,6 @@ class CourseSelectionRepository(Protocol):
         request_id: UUID,
     ) -> CourseSelectionRequest | None:
         """Return a selection request only from the requested tenant."""
-        ...
-
-    async def save_submission(
-        self,
-        *,
-        request: CourseSelectionRequest,
-        enrollments: tuple[CourseEnrollment, ...],
-        offering_capacities: dict[UUID, int],
-    ) -> None:
-        """Atomically save a request and any immediate enrollments."""
-        ...
-
-    async def save_decision(
-        self,
-        *,
-        request: CourseSelectionRequest,
-        approval: CourseSelectionApproval,
-        enrollments: tuple[CourseEnrollment, ...],
-        offering_capacities: dict[UUID, int],
-    ) -> None:
-        """Atomically save a decision, history, and resulting enrollments."""
         ...
 
 
@@ -450,6 +569,16 @@ class AcademicReferenceRepository(Protocol):
         """Return whether a program and intake-term both belong to the tenant."""
         ...
 
+    async def admissions_target_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether the exact target exists and its intake term is open."""
+        ...
+
     async def get_grade_target(
         self,
         *,
@@ -466,6 +595,17 @@ class AcademicReferenceRepository(Protocol):
         term_id: UUID,
     ) -> bool | None:
         """Return closure state, or None when the tenant term does not exist."""
+        ...
+
+    async def existing_scheduling_reference_ids(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        cohort_ids: frozenset[UUID],
+    ) -> AcademicSchedulingReferenceIds:
+        """Return only requested rooms, offerings, and cohorts in the tenant."""
         ...
 
     async def list_rooms(
@@ -506,8 +646,9 @@ class CourseSelectionAuditSink(Protocol):
         actor_subject_id: UUID,
         request_id: UUID,
         correlation_id: str,
+        outcome: str,
     ) -> None:
-        """Record one successful override or decision without free-form reasons."""
+        """Record one selection intent or outcome without free-form reasons."""
         ...
 
 
@@ -534,6 +675,14 @@ class AcademicAuditSink(CourseSelectionAuditSink, TermClosureAuditSink, Protocol
 class CourseSelectionStudentOwnership(Protocol):
     """Resolve whether a tenant actor owns one student profile reference."""
 
+    async def resolve_actor_student_profile_id(
+        self,
+        *,
+        actor: TenantActorContext,
+    ) -> UUID:
+        """Return the exact student profile owned by the active membership."""
+        ...
+
     async def actor_owns_student_profile(
         self,
         *,
@@ -548,12 +697,17 @@ __all__ = [
     "AcademicAuditSink",
     "AcademicCatalogRepository",
     "AcademicClock",
+    "AcademicProfileDirectory",
     "AcademicReferenceRepository",
     "AcceptedStudentAcademicEnrollmentRegistrar",
     "AdmissionsAcademicEnrollmentRepository",
     "CampusDirectory",
     "CourseSelectionAuditSink",
+    "CourseSelectionDecisionTransaction",
+    "CourseSelectionEnrollmentReader",
+    "CourseSelectionEvaluationCatalog",
     "CourseSelectionRepository",
     "CourseSelectionStudentOwnership",
+    "CourseSelectionSubmissionTransaction",
     "TermClosureAuditSink",
 ]

@@ -14,6 +14,7 @@ describe("session adapters", () => {
       email: "alex@example.edu",
       display_name: "Alex Morgan",
       is_platform_admin: true,
+      permissions: ["platform_administrators.manage"],
       expires_at: "2026-08-05T10:00:00+00:00",
     });
 
@@ -23,6 +24,7 @@ describe("session adapters", () => {
       displayName: "Alex Morgan",
     });
     expect(identity.isPlatformAdmin).toBe(true);
+    expect(identity.permissions).toEqual(["platform_administrators.manage"]);
   });
 
   it("accepts only active, complete membership discovery records", () => {
@@ -32,12 +34,14 @@ describe("session adapters", () => {
           id: "membership-1",
           organization_id: "organization-1",
           roles: ["organization_admin", "teacher"],
+          permissions: ["people.memberships.manage", "scheduling.read"],
           status: "active",
         },
         {
           id: "membership-2",
           organization_id: "organization-2",
           roles: ["student"],
+          permissions: ["academics.student.read_own"],
           status: "suspended",
         },
       ]),
@@ -46,6 +50,7 @@ describe("session adapters", () => {
         id: "membership-1",
         organizationId: "organization-1",
         roles: ["OrganizationAdmin", "Teacher"],
+        permissions: ["people.memberships.manage", "scheduling.read"],
       },
     ]);
   });
@@ -68,6 +73,7 @@ describe("session adapters", () => {
       {
         actor: { id: "actor-1", displayName: "Alex Morgan" },
         isPlatformAdmin: false,
+        permissions: [],
         expiresAt: "2026-08-05T10:00:00+00:00",
       },
       [
@@ -76,6 +82,7 @@ describe("session adapters", () => {
           organizationId: organization.id,
           organization,
           roles: ["OrganizationAdmin"],
+          permissions: ["scheduling.session.manage"],
         },
       ],
       organization.id,

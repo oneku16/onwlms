@@ -5,12 +5,16 @@ from datetime import datetime
 from uuid import UUID
 
 from core.errors import ConflictError
+from scheduling.application.contracts import ExistingSchedulingReferences
+from scheduling.domain.constraints import detect_hard_conflicts
 from scheduling.domain.exceptions import ScheduleVersionConflictError
+from scheduling.domain.exceptions import SchedulingConflictError
 from scheduling.domain.exceptions import SchedulingRuleError
 from scheduling.domain.models import ConstraintContext
 from scheduling.domain.models import ScheduledSession
 from scheduling.domain.models import TeacherAvailability
 from scheduling.domain.models import TeacherAvailabilityWindow
+from scheduling.domain.replacement import prepare_generated_replacement
 
 TenantKey = tuple[UUID, UUID]
 
@@ -66,6 +70,77 @@ class InMemorySchedulingResourceDirectory:
         """Replace one tenant constraint snapshot for deterministic tests."""
 
         self._contexts[context.organization_id] = context
+
+
+class InMemorySchedulingReferenceDirectory:
+    """Resolve explicitly configured tenant scheduling reference snapshots."""
+
+    def __init__(
+        self,
+        references: tuple[ExistingSchedulingReferences, ...] = (),
+    ) -> None:
+        self._references = {
+            reference.organization_id: reference for reference in references
+        }
+
+    async def existing_references(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        group_ids: frozenset[UUID],
+        teacher_ids: frozenset[UUID],
+    ) -> ExistingSchedulingReferences:
+        """Return the requested intersection for one exact configured tenant."""
+
+        configured = self._references.get(
+            organization_id,
+            ExistingSchedulingReferences(
+                organization_id=organization_id,
+                room_ids=frozenset(),
+                course_offering_ids=frozenset(),
+                group_ids=frozenset(),
+                teacher_ids=frozenset(),
+            ),
+        )
+        return ExistingSchedulingReferences(
+            organization_id=organization_id,
+            room_ids=room_ids & configured.room_ids,
+            course_offering_ids=(course_offering_ids & configured.course_offering_ids),
+            group_ids=group_ids & configured.group_ids,
+            teacher_ids=teacher_ids & configured.teacher_ids,
+        )
+
+
+class InMemorySchedulingAuditSink:
+    """Record ordered scheduling audit calls for local and test composition."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, UUID, UUID, UUID, str, str]] = []
+
+    async def record_scheduling_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        target_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record one privacy-minimized scheduling event in call order."""
+
+        self.events.append(
+            (
+                action,
+                organization_id,
+                actor_subject_id,
+                target_id,
+                correlation_id,
+                outcome,
+            )
+        )
 
 
 class InMemorySchedulingRepository:
@@ -140,16 +215,35 @@ class InMemorySchedulingRepository:
         """Create or compare-and-swap one timetable session."""
 
         async with self._lock:
-            key = (session.organization_id, session.id)
-            current = self._sessions.get(key)
-            if expected_version is None:
-                if current is not None:
-                    raise ConflictError("Timetable session already exists.")
-            elif current is None or current.version != expected_version:
-                raise ScheduleVersionConflictError(
-                    "Timetable session changed during the requested edit."
+            self._save_session(session=session, expected_version=expected_version)
+
+    async def save_conflict_free_session(
+        self,
+        *,
+        session: ScheduledSession,
+        expected_version: int | None,
+        constraints: ConstraintContext,
+    ) -> None:
+        """Check all current tenant sessions and save under one process lock."""
+
+        async with self._lock:
+            existing = tuple(
+                value
+                for value in self._sessions.values()
+                if value.organization_id == session.organization_id
+                and value.id != session.id
+            )
+            conflicts = detect_hard_conflicts(
+                candidate=session,
+                existing_sessions=existing,
+                context=constraints,
+            )
+            if conflicts:
+                codes = ", ".join(
+                    dict.fromkeys(conflict.code for conflict in conflicts)
                 )
-            self._sessions[key] = session
+                raise SchedulingConflictError(f"Session conflicts with: {codes}.")
+            self._save_session(session=session, expected_version=expected_version)
 
     async def replace_generated_schedule(
         self,
@@ -158,44 +252,64 @@ class InMemorySchedulingRepository:
         proposed_sessions: tuple[ScheduledSession, ...],
         locked_session_ids: frozenset[UUID],
         expected_versions: dict[UUID, int],
-    ) -> None:
-        """Atomically preserve exact locks and replace other tenant sessions."""
+        constraints: ConstraintContext,
+    ) -> tuple[ScheduledSession, ...]:
+        """Atomically preserve effective locks and assign replacement versions."""
 
         async with self._lock:
-            current = {
-                session.id: session
+            current_sessions = tuple(
+                session
                 for session in self._sessions.values()
                 if session.organization_id == organization_id
-            }
-            current_versions = {
-                identifier: session.version for identifier, session in current.items()
-            }
-            if current_versions != expected_versions:
-                raise ScheduleVersionConflictError(
-                    "Timetable changed after schedule generation."
+            )
+            prepared_sessions = prepare_generated_replacement(
+                organization_id=organization_id,
+                current_sessions=current_sessions,
+                proposed_sessions=proposed_sessions,
+                asserted_locked_session_ids=locked_session_ids,
+                expected_versions=expected_versions,
+            )
+            conflicts = tuple(
+                conflict
+                for candidate in prepared_sessions
+                for conflict in detect_hard_conflicts(
+                    candidate=candidate,
+                    existing_sessions=prepared_sessions,
+                    context=constraints,
                 )
-            if not locked_session_ids.issubset(current):
-                raise ScheduleVersionConflictError(
-                    "A locked timetable session no longer exists."
+            )
+            if conflicts:
+                codes = ", ".join(
+                    dict.fromkeys(conflict.code for conflict in conflicts)
                 )
-            proposed_by_id = {session.id: session for session in proposed_sessions}
-            if len(proposed_by_id) != len(proposed_sessions):
-                raise SchedulingRuleError("Generated schedule has duplicate sessions.")
-            if any(
-                session.organization_id != organization_id
-                for session in proposed_sessions
-            ):
-                raise SchedulingRuleError("Generated schedule tenant does not match.")
-            for locked_id in locked_session_ids:
-                if proposed_by_id.get(locked_id) != current[locked_id]:
-                    raise ScheduleVersionConflictError(
-                        "Generated schedule changed a locked session."
-                    )
+                raise SchedulingConflictError(
+                    f"Generated proposal conflicts with: {codes}."
+                )
             tenant_keys = [key for key in self._sessions if key[0] == organization_id]
             for key in tenant_keys:
                 del self._sessions[key]
-            for session in proposed_sessions:
+            for session in prepared_sessions:
                 self._sessions[(organization_id, session.id)] = session
+            return prepared_sessions
+
+    def _save_session(
+        self,
+        *,
+        session: ScheduledSession,
+        expected_version: int | None,
+    ) -> None:
+        """Persist one session while the repository process lock is held."""
+
+        key = (session.organization_id, session.id)
+        current = self._sessions.get(key)
+        if expected_version is None:
+            if current is not None:
+                raise ConflictError("Timetable session already exists.")
+        elif current is None or current.version != expected_version:
+            raise ScheduleVersionConflictError(
+                "Timetable session changed during the requested edit."
+            )
+        self._sessions[key] = session
 
 
 class InMemoryTeacherAvailabilityRepository:
@@ -300,6 +414,8 @@ class InMemoryTeacherAvailabilityRepository:
 
 
 __all__ = [
+    "InMemorySchedulingAuditSink",
+    "InMemorySchedulingReferenceDirectory",
     "InMemorySchedulingRepository",
     "InMemorySchedulingResourceDirectory",
     "InMemoryTeacherAvailabilityRepository",

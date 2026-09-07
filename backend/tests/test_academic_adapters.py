@@ -13,6 +13,7 @@ from academic_adapters import AcademicSchedulingResourceAdapter
 from academic_adapters import AcademicTermClosureAdapter
 from academic_adapters import AdmissionsAcademicTargetAdapter
 from academics.application.contracts import AcademicGradeTarget
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.reference_service import AcademicReferenceService
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import Room
@@ -26,6 +27,7 @@ from scheduling.domain.constraints import detect_hard_conflicts
 from scheduling.domain.models import HardConstraintCode
 from scheduling.domain.models import ScheduledSession
 from scheduling.domain.models import TeacherAvailabilityWindow
+from scheduling.infrastructure.repository import InMemorySchedulingAuditSink
 from scheduling.infrastructure.repository import InMemoryTeacherAvailabilityRepository
 
 
@@ -38,6 +40,7 @@ class _AcademicReferenceRepository:
     term_closed: bool
     rooms: tuple[Room, ...]
     events: tuple[AcademicCalendarEvent, ...]
+    cohort_ids: frozenset[UUID]
 
     async def admissions_target_exists(
         self,
@@ -52,6 +55,24 @@ class _AcademicReferenceRepository:
             organization_id == self.organization_id
             and program_id == self.program_id
             and intake_id == self.term_id
+        )
+
+    async def admissions_target_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether the exact test target exists and is not closed."""
+
+        return (
+            await self.admissions_target_exists(
+                organization_id=organization_id,
+                program_id=program_id,
+                intake_id=intake_id,
+            )
+            and not self.term_closed
         )
 
     async def get_grade_target(
@@ -89,6 +110,32 @@ class _AcademicReferenceRepository:
         """Return configured rooms only for the exact tenant."""
 
         return self.rooms if organization_id == self.organization_id else ()
+
+    async def existing_scheduling_reference_ids(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        cohort_ids: frozenset[UUID],
+    ) -> AcademicSchedulingReferenceIds:
+        """Return requested Academic references only for the exact tenant."""
+
+        if organization_id != self.organization_id:
+            return AcademicSchedulingReferenceIds(
+                organization_id=organization_id,
+                room_ids=frozenset(),
+                course_offering_ids=frozenset(),
+                cohort_ids=frozenset(),
+            )
+        return AcademicSchedulingReferenceIds(
+            organization_id=organization_id,
+            room_ids=room_ids & frozenset(room.id for room in self.rooms),
+            course_offering_ids=(
+                course_offering_ids & frozenset({self.grade_target.course_offering_id})
+            ),
+            cohort_ids=cohort_ids & self.cohort_ids,
+        )
 
     async def list_calendar_events(
         self,
@@ -165,6 +212,7 @@ def _repository() -> _AcademicReferenceRepository:
                 instruction_allowed=True,
             ),
         ),
+        cohort_ids=frozenset({uuid4()}),
     )
 
 
@@ -176,6 +224,11 @@ async def test_admissions_and_grading_adapters_translate_consumer_contracts() ->
     terms: TermClosureDirectory = AcademicTermClosureAdapter(references)
 
     assert await admissions.target_exists(
+        organization_id=repository.organization_id,
+        program_id=repository.program_id,
+        intake_id=repository.term_id,
+    )
+    assert not await admissions.acceptance_is_open(
         organization_id=repository.organization_id,
         program_id=repository.program_id,
         intake_id=repository.term_id,
@@ -214,6 +267,7 @@ async def test_scheduling_adapter_loads_authoritative_teacher_availability() -> 
             organization_id=repository.organization_id,
             teacher_ids=frozenset({known_teacher_id}),
         ),
+        InMemorySchedulingAuditSink(),
     )
     event = repository.events[0]
     await availability_repository.create_window(
@@ -225,13 +279,19 @@ async def test_scheduling_adapter_loads_authoritative_teacher_availability() -> 
             ends_at=event.ends_at,
         )
     )
-    resources: SchedulingResourceDirectory = AcademicSchedulingResourceAdapter(
+    teacher_references = _TeacherReferences(
+        organization_id=repository.organization_id,
+        teacher_ids=frozenset({known_teacher_id}),
+    )
+    resources = AcademicSchedulingResourceAdapter(
         references,
         availability_service,
+        teacher_references,
     )
+    resource_directory: SchedulingResourceDirectory = resources
     teacher_ids = frozenset({known_teacher_id, unknown_teacher_id})
 
-    context = await resources.constraint_context(
+    context = await resource_directory.constraint_context(
         organization_id=repository.organization_id,
         starts_at=event.starts_at,
         ends_at=event.ends_at,
@@ -268,3 +328,19 @@ async def test_scheduling_adapter_loads_authoritative_teacher_availability() -> 
         for conflict in conflicts
         if conflict.code is HardConstraintCode.TEACHER_UNAVAILABLE
     } == {unknown_teacher_id}
+
+    existing = await resources.existing_references(
+        organization_id=repository.organization_id,
+        room_ids=frozenset({repository.rooms[0].id, uuid4()}),
+        course_offering_ids=frozenset(
+            {repository.grade_target.course_offering_id, uuid4()}
+        ),
+        group_ids=repository.cohort_ids | frozenset({uuid4()}),
+        teacher_ids=teacher_ids,
+    )
+    assert existing.room_ids == frozenset({repository.rooms[0].id})
+    assert existing.course_offering_ids == frozenset(
+        {repository.grade_target.course_offering_id}
+    )
+    assert existing.group_ids == repository.cohort_ids
+    assert existing.teacher_ids == frozenset({known_teacher_id})

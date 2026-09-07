@@ -13,7 +13,7 @@ export interface ScheduleSession {
   readonly title: string;
   readonly startsAt: string;
   readonly endsAt: string;
-  readonly version: number | null;
+  readonly version: number;
   readonly locked?: boolean;
   readonly teacher?: string;
   readonly room?: string;
@@ -46,7 +46,18 @@ function parseScheduleSessionRecord(
     "start_time",
   ]);
   const endsAt = readFirstString(record, ["ends_at", "endsAt", "end_time"]);
-  if (!id || !rawTitle || !validDateTime(startsAt) || !validDateTime(endsAt)) {
+  const version = asNumber(record.version);
+  const locked = asBoolean(record.locked);
+  if (
+    !id ||
+    !rawTitle ||
+    !validDateTime(startsAt) ||
+    !validDateTime(endsAt) ||
+    version === undefined ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    locked === undefined
+  ) {
     return undefined;
   }
   const title = rawTitle.replaceAll("_", " ");
@@ -71,8 +82,8 @@ function parseScheduleSessionRecord(
     title,
     startsAt,
     endsAt,
-    version: asNumber(record.version) ?? null,
-    locked: asBoolean(record.locked) ?? false,
+    version,
+    locked,
     ...(teacher === undefined ? {} : { teacher }),
     ...(room === undefined ? {} : { room }),
     ...(group === undefined ? {} : { group }),
@@ -86,21 +97,24 @@ function scheduleEntries(value: unknown): readonly unknown[] {
   }
   const record = asRecord(payload);
   if (!record) {
-    return [];
+    throw new Error("The scheduling list response is not supported.");
   }
   for (const key of ["items", "sessions", "lessons", "results"]) {
     if (Array.isArray(record[key])) {
       return record[key];
     }
   }
-  return [];
+  throw new Error("The scheduling list response is not supported.");
 }
 
 export function parseSchedule(value: unknown): readonly ScheduleSession[] {
-  return scheduleEntries(value).flatMap((entry) => {
+  return scheduleEntries(value).map((entry) => {
     const record = asRecord(entry);
     const parsed = record ? parseScheduleSessionRecord(record) : undefined;
-    return parsed === undefined ? [] : [parsed];
+    if (!parsed) {
+      throw new Error("The scheduling list response is not supported.");
+    }
+    return parsed;
   });
 }
 

@@ -922,6 +922,27 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 1rem;
+  margin-top: 0.65rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-800);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.checkbox-label input {
+  width: auto;
+  min-height: auto;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;

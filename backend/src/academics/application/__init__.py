@@ -5,12 +5,14 @@ from academics.application.admissions_enrollment_service import (
 )
 from academics.application.contracts import AcademicGradeTarget
 from academics.application.contracts import AcademicInstructionWindow
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcademicSchedulingReferences
 from academics.application.contracts import AcademicSchedulingRoom
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
 from academics.application.ports import AcademicCatalogRepository
 from academics.application.ports import AcademicClock
+from academics.application.ports import AcademicProfileDirectory
 from academics.application.ports import AcademicReferenceRepository
 from academics.application.ports import AcceptedStudentAcademicEnrollmentRegistrar
 from academics.application.ports import AdmissionsAcademicEnrollmentRepository
@@ -40,8 +42,10 @@ __all__ = [
     "AcademicClock",
     "AcademicGradeTarget",
     "AcademicInstructionWindow",
+    "AcademicProfileDirectory",
     "AcademicReferenceRepository",
     "AcademicReferenceService",
+    "AcademicSchedulingReferenceIds",
     "AcademicSchedulingReferences",
     "AcademicSchedulingRoom",
     "AcceptedStudentAcademicEnrollmentCommand",

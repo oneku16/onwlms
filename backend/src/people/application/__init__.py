@@ -16,6 +16,7 @@ from people.application.reference_service import PeopleReferenceService
 from people.application.service import APPOINT_OWNER_PERMISSION
 from people.application.service import MANAGE_GUARDIANS_PERMISSION
 from people.application.service import MANAGE_MEMBERSHIPS_PERMISSION
+from people.application.service import MANAGE_OWNER_LIFECYCLE_PERMISSION
 from people.application.service import MANAGE_PEOPLE_PERMISSION
 from people.application.service import READ_PEOPLE_PERMISSION
 from people.application.service import ContactInput
@@ -26,6 +27,7 @@ __all__ = [
     "APPOINT_OWNER_PERMISSION",
     "MANAGE_GUARDIANS_PERMISSION",
     "MANAGE_MEMBERSHIPS_PERMISSION",
+    "MANAGE_OWNER_LIFECYCLE_PERMISSION",
     "MANAGE_PEOPLE_PERMISSION",
     "READ_PEOPLE_PERMISSION",
     "AcceptedStudentRegistrar",

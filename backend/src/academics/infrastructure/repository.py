@@ -1,15 +1,21 @@
 """Functional in-memory academic adapters for tests and local composition."""
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import UUID
 
 from academics.application.contracts import AcademicGradeTarget
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
+from academics.application.ports import CourseSelectionDecisionTransaction
+from academics.application.ports import CourseSelectionSubmissionTransaction
 from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
 from academics.domain.models import AcademicCalendarEvent
+from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
 from academics.domain.models import Cohort
 from academics.domain.models import Course
@@ -29,6 +35,7 @@ from academics.domain.models import StudentAcademicEnrollment
 from academics.domain.models import TeacherAssignment
 from academics.domain.models import Term
 from core.errors import ConflictError
+from core.errors import NotFoundError
 
 TenantKey = tuple[UUID, UUID]
 
@@ -687,6 +694,20 @@ class InMemoryAcademicRepository:
             intake_id,
         ) in self._terms
 
+    async def admissions_target_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether a same-tenant target exists and its term remains open."""
+
+        if (organization_id, program_id) not in self._programs:
+            return False
+        term = self._terms.get((organization_id, intake_id))
+        return term is not None and not term.is_closed
+
     async def get_grade_target(
         self,
         *,
@@ -710,6 +731,15 @@ class InMemoryAcademicRepository:
             (organization_id, course_enrollment.course_offering_id)
         )
         if student_enrollment is None or offering is None:
+            return None
+        if student_enrollment.status is not AcademicEnrollmentStatus.ACTIVE:
+            return None
+        # Completed course participation remains a legitimate finalization and
+        # revision target; withdrawal in either enrollment invalidates grading.
+        if course_enrollment.status not in {
+            CourseEnrollmentStatus.ENROLLED,
+            CourseEnrollmentStatus.COMPLETED,
+        }:
             return None
         course = self._courses.get((organization_id, offering.course_id))
         term = self._terms.get((organization_id, offering.term_id))
@@ -735,6 +765,35 @@ class InMemoryAcademicRepository:
 
         term = self._terms.get((organization_id, term_id))
         return term.is_closed if term is not None else None
+
+    async def existing_scheduling_reference_ids(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        cohort_ids: frozenset[UUID],
+    ) -> AcademicSchedulingReferenceIds:
+        """Return exact requested references from one in-memory tenant."""
+
+        return AcademicSchedulingReferenceIds(
+            organization_id=organization_id,
+            room_ids=frozenset(
+                identifier
+                for identifier in room_ids
+                if (organization_id, identifier) in self._rooms
+            ),
+            course_offering_ids=frozenset(
+                identifier
+                for identifier in course_offering_ids
+                if (organization_id, identifier) in self._offerings
+            ),
+            cohort_ids=frozenset(
+                identifier
+                for identifier in cohort_ids
+                if (organization_id, identifier) in self._cohorts
+            ),
+        )
 
     async def list_rooms(
         self,
@@ -825,6 +884,55 @@ class InMemoryAcademicRepository:
 
         return self._selection_requests.get((organization_id, request_id))
 
+    @asynccontextmanager
+    async def submission_transaction(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID,
+    ) -> AsyncIterator[CourseSelectionSubmissionTransaction]:
+        """Hold the student aggregate lock through evaluation and submission."""
+
+        async with self._lock:
+            enrollment = self._student_enrollments.get(
+                (organization_id, student_academic_enrollment_id)
+            )
+            if enrollment is None:
+                raise NotFoundError("Student academic enrollment was not found.")
+            yield _InMemoryCourseSelectionTransaction(
+                repository=self,
+                organization_id=organization_id,
+                student_enrollment=enrollment,
+                request=None,
+            )
+
+    @asynccontextmanager
+    async def decision_transaction(
+        self,
+        *,
+        organization_id: UUID,
+        request_id: UUID,
+    ) -> AsyncIterator[CourseSelectionDecisionTransaction]:
+        """Hold request and student aggregate locks through one decision."""
+
+        async with self._lock:
+            request = self._selection_requests.get((organization_id, request_id))
+            if request is None:
+                raise CourseSelectionDecisionError(
+                    "Course-selection request no longer exists."
+                )
+            enrollment = self._student_enrollments.get(
+                (organization_id, request.student_academic_enrollment_id)
+            )
+            if enrollment is None:
+                raise NotFoundError("Student academic enrollment was not found.")
+            yield _InMemoryCourseSelectionTransaction(
+                repository=self,
+                organization_id=organization_id,
+                student_enrollment=enrollment,
+                request=request,
+            )
+
     async def save_submission(
         self,
         *,
@@ -835,16 +943,11 @@ class InMemoryAcademicRepository:
         """Atomically save a new request and immediate course enrollments."""
 
         async with self._lock:
-            key = (request.organization_id, request.id)
-            if key in self._selection_requests:
-                raise ConflictError("Course-selection request already exists.")
-            self._check_enrollment_capacity(
-                organization_id=request.organization_id,
+            self._save_submission_unlocked(
+                request=request,
                 enrollments=enrollments,
                 offering_capacities=offering_capacities,
             )
-            self._selection_requests[key] = request
-            self._persist_course_enrollments(enrollments)
 
     async def save_decision(
         self,
@@ -857,26 +960,61 @@ class InMemoryAcademicRepository:
         """Atomically replace pending state and append decision effects."""
 
         async with self._lock:
-            key = (request.organization_id, request.id)
-            existing = self._selection_requests.get(key)
-            if existing is None:
-                raise CourseSelectionDecisionError(
-                    "Course-selection request no longer exists."
-                )
-            if existing.status is not CourseSelectionStatus.PENDING:
-                raise CourseSelectionDecisionError(
-                    "Course-selection request was already decided."
-                )
-            self._check_enrollment_capacity(
-                organization_id=request.organization_id,
+            self._save_decision_unlocked(
+                request=request,
+                approval=approval,
                 enrollments=enrollments,
                 offering_capacities=offering_capacities,
             )
-            self._selection_requests[key] = request
-            self._selection_approvals[(approval.organization_id, approval.id)] = (
-                approval
+
+    def _save_submission_unlocked(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Persist a submission while the caller holds the repository lock."""
+
+        key = (request.organization_id, request.id)
+        if key in self._selection_requests:
+            raise ConflictError("Course-selection request already exists.")
+        self._check_enrollment_capacity(
+            organization_id=request.organization_id,
+            enrollments=enrollments,
+            offering_capacities=offering_capacities,
+        )
+        self._selection_requests[key] = request
+        self._persist_course_enrollments(enrollments)
+
+    def _save_decision_unlocked(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        approval: CourseSelectionApproval,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Persist a decision while the caller holds the repository lock."""
+
+        key = (request.organization_id, request.id)
+        existing = self._selection_requests.get(key)
+        if existing is None:
+            raise CourseSelectionDecisionError(
+                "Course-selection request no longer exists."
             )
-            self._persist_course_enrollments(enrollments)
+        if existing.status is not CourseSelectionStatus.PENDING:
+            raise CourseSelectionDecisionError(
+                "Course-selection request was already decided."
+            )
+        self._check_enrollment_capacity(
+            organization_id=request.organization_id,
+            enrollments=enrollments,
+            offering_capacities=offering_capacities,
+        )
+        self._selection_requests[key] = request
+        self._selection_approvals[(approval.organization_id, approval.id)] = approval
+        self._persist_course_enrollments(enrollments)
 
     async def list_approvals(
         self,
@@ -943,6 +1081,160 @@ class InMemoryAcademicRepository:
         for enrollment in enrollments:
             self._course_enrollments[(enrollment.organization_id, enrollment.id)] = (
                 enrollment
+            )
+
+
+class _InMemoryCourseSelectionTransaction:
+    """Expose current selection reads while one repository lock is held."""
+
+    def __init__(
+        self,
+        *,
+        repository: InMemoryAcademicRepository,
+        organization_id: UUID,
+        student_enrollment: StudentAcademicEnrollment,
+        request: CourseSelectionRequest | None,
+    ) -> None:
+        self._repository = repository
+        self._organization_id = organization_id
+        self._student_enrollment = student_enrollment
+        self._request = request
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the student enrollment protected by the active lock."""
+
+        return self._student_enrollment
+
+    @property
+    def request(self) -> CourseSelectionRequest:
+        """Return the request protected by the active decision lock."""
+
+        if self._request is None:
+            raise RuntimeError("A submission transaction has no existing request.")
+        return self._request
+
+    async def get_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> Term | None:
+        """Return one term while the student aggregate lock is held."""
+
+        self._require_tenant(organization_id)
+        return await self._repository.get_term(
+            organization_id=organization_id,
+            term_id=term_id,
+        )
+
+    async def get_course_offering(
+        self,
+        *,
+        organization_id: UUID,
+        offering_id: UUID,
+    ) -> CourseOffering | None:
+        """Return one offering while the student aggregate lock is held."""
+
+        self._require_tenant(organization_id)
+        return await self._repository.get_course_offering(
+            organization_id=organization_id,
+            offering_id=offering_id,
+        )
+
+    async def get_curriculum(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        academic_year_id: UUID,
+    ) -> ProgramCurriculum | None:
+        """Return current curriculum state inside the selection transaction."""
+
+        self._require_tenant(organization_id)
+        return await self._repository.get_curriculum(
+            organization_id=organization_id,
+            program_id=program_id,
+            academic_year_id=academic_year_id,
+        )
+
+    async def get_selection_policy(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        term_id: UUID,
+    ) -> CourseSelectionPolicy | None:
+        """Return current policy state inside the selection transaction."""
+
+        self._require_tenant(organization_id)
+        return await self._repository.get_selection_policy(
+            organization_id=organization_id,
+            program_id=program_id,
+            term_id=term_id,
+        )
+
+    async def list_course_enrollments(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Return current enrollment state inside the selection transaction."""
+
+        self._require_tenant(organization_id)
+        return await self._repository.list_course_enrollments(
+            organization_id=organization_id,
+            student_academic_enrollment_id=student_academic_enrollment_id,
+        )
+
+    async def save_submission(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Persist a submission without reacquiring the held lock."""
+
+        self._require_request_scope(request)
+        self._repository._save_submission_unlocked(
+            request=request,
+            enrollments=enrollments,
+            offering_capacities=offering_capacities,
+        )
+
+    async def save_decision(
+        self,
+        *,
+        request: CourseSelectionRequest,
+        approval: CourseSelectionApproval,
+        enrollments: tuple[CourseEnrollment, ...],
+        offering_capacities: dict[UUID, int],
+    ) -> None:
+        """Persist a decision without reacquiring the held lock."""
+
+        self._require_request_scope(request)
+        if self.request.id != request.id:
+            raise CourseSelectionDecisionError(
+                "Course-selection request changed during decision."
+            )
+        self._repository._save_decision_unlocked(
+            request=request,
+            approval=approval,
+            enrollments=enrollments,
+            offering_capacities=offering_capacities,
+        )
+
+    def _require_tenant(self, organization_id: UUID) -> None:
+        if organization_id != self._organization_id:
+            raise NotFoundError("Course-selection state was not found.")
+
+    def _require_request_scope(self, request: CourseSelectionRequest) -> None:
+        self._require_tenant(request.organization_id)
+        if request.student_academic_enrollment_id != self._student_enrollment.id:
+            raise CourseSelectionDecisionError(
+                "Course-selection student enrollment changed during mutation."
             )
 
 

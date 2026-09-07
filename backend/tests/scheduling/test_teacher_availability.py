@@ -26,6 +26,7 @@ from scheduling.application.service import SCHEDULING_READ
 from scheduling.application.service import SCHEDULING_SESSION_MANAGE
 from scheduling.domain.exceptions import SchedulingRuleError
 from scheduling.domain.models import TeacherAvailabilityWindow
+from scheduling.infrastructure.repository import InMemorySchedulingAuditSink
 from scheduling.infrastructure.repository import InMemoryTeacherAvailabilityRepository
 from scheduling.presentation.router import router
 
@@ -128,6 +129,7 @@ async def test_service_rejects_unknown_and_wrong_tenant_teacher_profiles() -> No
                 other_organization_id: frozenset({wrong_tenant_teacher_id}),
             }
         ),
+        InMemorySchedulingAuditSink(),
     )
     actor = _context(organization_id, SCHEDULING_SESSION_MANAGE)
     starts_at = datetime(2026, 8, 10, 8, tzinfo=UTC)
@@ -175,6 +177,7 @@ async def test_constraint_query_merges_windows_and_ignores_orphaned_teacher() ->
     service = TeacherAvailabilityService(
         repository,
         _TeacherReferences({organization_id: frozenset({teacher_id})}),
+        InMemorySchedulingAuditSink(),
     )
     for teacher, start_delta, end_delta in (
         (teacher_id, timedelta(), timedelta(hours=1)),
@@ -270,6 +273,7 @@ async def test_service_enforces_existing_permissions_and_tenant_scope() -> None:
     service = TeacherAvailabilityService(
         repository,
         _TeacherReferences({organization_id: frozenset({teacher_id})}),
+        InMemorySchedulingAuditSink(),
     )
     window = _window(
         organization_id=organization_id,
@@ -308,6 +312,36 @@ async def test_service_enforces_existing_permissions_and_tenant_scope() -> None:
         )
 
 
+async def test_availability_mutations_record_intent_then_success() -> None:
+    organization_id = uuid4()
+    teacher_id = uuid4()
+    starts_at = datetime(2026, 8, 10, 8, tzinfo=UTC)
+    repository = InMemoryTeacherAvailabilityRepository()
+    audit = InMemorySchedulingAuditSink()
+    service = TeacherAvailabilityService(
+        repository,
+        _TeacherReferences({organization_id: frozenset({teacher_id})}),
+        audit,
+    )
+    actor = _context(organization_id, SCHEDULING_SESSION_MANAGE)
+    window = _window(
+        organization_id=organization_id,
+        teacher_id=teacher_id,
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+
+    await service.create_window(context=actor, window=window)
+    await service.delete_window(context=actor, window_id=window.id)
+
+    assert [(event[0], event[-1]) for event in audit.events] == [
+        ("scheduling.teacher_availability.create.intent", "intent_recorded"),
+        ("scheduling.teacher_availability.create.succeeded", "succeeded"),
+        ("scheduling.teacher_availability.delete.intent", "intent_recorded"),
+        ("scheduling.teacher_availability.delete.succeeded", "succeeded"),
+    ]
+
+
 async def test_api_uses_uuidv7_permissions_and_csrf_for_mutations() -> None:
     organization_id = uuid4()
     teacher_id = uuid4()
@@ -315,6 +349,7 @@ async def test_api_uses_uuidv7_permissions_and_csrf_for_mutations() -> None:
     service = TeacherAvailabilityService(
         InMemoryTeacherAvailabilityRepository(),
         _TeacherReferences({organization_id: frozenset({teacher_id})}),
+        InMemorySchedulingAuditSink(),
     )
     actor = _context(
         organization_id,

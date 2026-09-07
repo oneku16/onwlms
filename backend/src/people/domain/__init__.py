@@ -16,6 +16,8 @@ from people.domain.models import MembershipStatus
 from people.domain.models import Person
 from people.domain.models import PersonProfile
 from people.domain.models import ProfileKind
+from people.domain.ownership import revoke_organization_owner
+from people.domain.ownership import suspend_organization_owner
 
 __all__ = [
     "ROLE_PERMISSIONS",
@@ -34,4 +36,6 @@ __all__ = [
     "PersonNotFoundError",
     "PersonProfile",
     "ProfileKind",
+    "revoke_organization_owner",
+    "suspend_organization_owner",
 ]

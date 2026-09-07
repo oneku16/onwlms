@@ -97,6 +97,10 @@ class FakeCampusRepository:
 
 
 class FakeOrganizationAuditSink:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.events: list[tuple[str, UUID, str]] = []
+
     async def record_organization_event(
         self,
         *,
@@ -107,7 +111,9 @@ class FakeOrganizationAuditSink:
         outcome: str,
     ) -> None:
         assert action and organization_id and actor_subject_id and correlation_id
-        assert outcome == "succeeded"
+        if self.fail:
+            raise RuntimeError("audit unavailable")
+        self.events.append((action, organization_id, outcome))
 
 
 def _configuration() -> OrganizationConfiguration:
@@ -133,7 +139,9 @@ def _organization(organization_id: UUID) -> Organization:
     )
 
 
-def _service() -> tuple[
+def _service(
+    audit: FakeOrganizationAuditSink | None = None,
+) -> tuple[
     OrganizationService,
     FakeOrganizationRepository,
     FakeCampusRepository,
@@ -144,7 +152,7 @@ def _service() -> tuple[
         OrganizationService(
             organizations=organizations,
             campuses=campuses,
-            audit=FakeOrganizationAuditSink(),
+            audit=audit or FakeOrganizationAuditSink(),
         ),
         organizations,
         campuses,
@@ -196,6 +204,21 @@ async def test_platform_creation_and_lifecycle_are_separately_authorized() -> No
             actor=actor,
             organization_id=organization.id,
         )
+
+
+async def test_organization_mutation_aborts_when_audit_intent_fails() -> None:
+    service, organizations, _ = _service(FakeOrganizationAuditSink(fail=True))
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await service.create_organization(
+            actor=_platform_actor(CREATE_ORGANIZATION_PERMISSION),
+            slug="audit-protected",
+            organization_type=OrganizationType.UNIVERSITY,
+            branding=_branding(),
+            configuration=_configuration(),
+        )
+
+    assert organizations.values == {}
 
 
 async def test_platform_organization_list_is_bounded_and_authorized() -> None:

@@ -6,22 +6,9 @@ import { useState } from "react";
 import { clientApiRequest } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { useCsrfProtection } from "@/lib/api/use-csrf";
+import type { ResourceSummary } from "@/lib/api/resources";
 
-const featureCodes = [
-  "academic",
-  "moodle_integration",
-  "ownid_sso",
-  "mcp",
-  "hr",
-  "finance",
-  "library",
-  "dormitory",
-  "advanced_analytics",
-  "multiple_administrators",
-  "custom_roles",
-  "timetable_generation",
-  "white_label",
-] as const;
+const supportedOverrideFeatures = new Set(["mcp", "timetable_generation"]);
 
 function asIso(value: FormDataEntryValue | null): string | null {
   const input = String(value ?? "").trim();
@@ -43,7 +30,13 @@ function MutationState({ message }: { readonly message: string | null }) {
   ) : null;
 }
 
-export function SubscriptionAssignmentForm() {
+export function SubscriptionAssignmentForm({
+  organizations,
+  plans,
+}: {
+  readonly organizations: readonly ResourceSummary[];
+  readonly plans: readonly ResourceSummary[];
+}) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -88,20 +81,36 @@ export function SubscriptionAssignmentForm() {
     <form className="form-card" onSubmit={(event) => void submit(event)}>
       <div className="form-grid">
         <label>
-          Organization ID
-          <input name="organizationId" required autoComplete="off" />
+          Organization
+          <select name="organizationId" required defaultValue="">
+            <option value="" disabled>
+              Select an organization
+            </option>
+            {organizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.title}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
-          Plan ID
-          <input name="planId" required autoComplete="off" />
+          Plan
+          <select name="planId" required defaultValue="">
+            <option value="" disabled>
+              Select a plan
+            </option>
+            {plans.map((plan) => (
+              <option key={plan.id} value={plan.id}>
+                {plan.title}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Status
           <select name="status" defaultValue="active">
             <option value="trialing">Trialing</option>
             <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
-            <option value="canceled">Canceled</option>
           </select>
         </label>
         <label>
@@ -123,7 +132,12 @@ export function SubscriptionAssignmentForm() {
         <button
           className="button"
           type="submit"
-          disabled={!csrfAvailable || submitting}
+          disabled={
+            !csrfAvailable ||
+            submitting ||
+            organizations.length === 0 ||
+            plans.length === 0
+          }
         >
           {submitting ? "Saving…" : "Assign subscription"}
         </button>
@@ -132,11 +146,21 @@ export function SubscriptionAssignmentForm() {
   );
 }
 
-export function EntitlementOverrideForm() {
+export function EntitlementOverrideForm({
+  organizations,
+  features,
+}: {
+  readonly organizations: readonly ResourceSummary[];
+  readonly features: readonly ResourceSummary[];
+}) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const csrfAvailable = useCsrfProtection();
+  const supportedFeatures = features.filter(
+    (feature) =>
+      feature.code !== undefined && supportedOverrideFeatures.has(feature.code),
+  );
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -185,15 +209,27 @@ export function EntitlementOverrideForm() {
     <form className="form-card" onSubmit={(event) => void submit(event)}>
       <div className="form-grid">
         <label>
-          Organization ID
-          <input name="organizationId" required autoComplete="off" />
+          Organization
+          <select name="organizationId" required defaultValue="">
+            <option value="" disabled>
+              Select an organization
+            </option>
+            {organizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.title}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Feature
-          <select name="feature" defaultValue="mcp">
-            {featureCodes.map((feature) => (
-              <option key={feature} value={feature}>
-                {feature.replaceAll("_", " ")}
+          <select name="feature" required defaultValue="">
+            <option value="" disabled>
+              Select a supported feature
+            </option>
+            {supportedFeatures.map((feature) => (
+              <option key={feature.id} value={feature.code}>
+                {feature.title}
               </option>
             ))}
           </select>
@@ -229,7 +265,12 @@ export function EntitlementOverrideForm() {
         <button
           className="button"
           type="submit"
-          disabled={!csrfAvailable || submitting}
+          disabled={
+            !csrfAvailable ||
+            submitting ||
+            organizations.length === 0 ||
+            supportedFeatures.length === 0
+          }
         >
           {submitting ? "Saving…" : "Set feature override"}
         </button>

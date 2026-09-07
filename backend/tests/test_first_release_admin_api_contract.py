@@ -1,10 +1,17 @@
 """Contract coverage for the first-release academic administration surface."""
 
+from datetime import UTC
+from datetime import datetime
 from decimal import Decimal
+from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from pydantic import ValidationError
 
+from academics.presentation.router import StudentEnrollmentBody
+from academics.presentation.router import StudentEnrollmentResponse
 from academics.presentation.router import TermBody
 from academics.presentation.router import router as academic_router
 from admissions.presentation.router import ApplicationResponse
@@ -84,6 +91,8 @@ def test_admin_contracts_fail_closed_and_preserve_concurrency_fields() -> None:
     """Do not expose unaudited closure or omit optimistic version snapshots."""
 
     assert "is_closed" not in TermBody.model_fields
+    assert "status" not in StudentEnrollmentBody.model_fields
+    assert "status" in StudentEnrollmentResponse.model_fields
     assert set(SessionLockBody.model_fields) == {"locked", "version"}
     assert "expected_revision_number" in FinalGradeRevisionBody.model_fields
     assert set(GenerationApplyBody.model_fields) == {
@@ -91,6 +100,27 @@ def test_admin_contracts_fail_closed_and_preserve_concurrency_fields() -> None:
         "locked_session_ids",
         "expected_versions",
     }
+
+
+def test_student_enrollment_creation_rejects_client_owned_terminal_status() -> None:
+    """Reject terminal creation status until explicit transitions are validated."""
+
+    payload = {
+        "student_id": uuid4(),
+        "program_id": uuid4(),
+        "academic_year_id": uuid4(),
+        "enrolled_at": datetime(2026, 8, 7, 10, tzinfo=UTC),
+        "status": "withdrawn",
+    }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        StudentEnrollmentBody.model_validate(payload)
+
+    request_schema = _application().openapi()["components"]["schemas"][
+        "StudentEnrollmentBody"
+    ]
+    assert request_schema["additionalProperties"] is False
+    assert "status" not in request_schema["properties"]
 
 
 def test_safe_admissions_and_typed_grading_responses_remain_stable() -> None:

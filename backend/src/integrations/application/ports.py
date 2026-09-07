@@ -169,11 +169,13 @@ class MoodleIntegrationAuditSink(Protocol):
     async def record_moodle_configuration_event(
         self,
         *,
+        action: str,
         organization_id: UUID,
         actor_subject_id: UUID,
         correlation_id: str,
+        outcome: str,
     ) -> None:
-        """Record successful configuration without URL or credential material."""
+        """Record configuration intent or outcome without sensitive material."""
         ...
 
 

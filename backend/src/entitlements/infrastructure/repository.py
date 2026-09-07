@@ -132,6 +132,30 @@ class SQLAlchemyEntitlementRepository:
                 )
             return plans
 
+    async def get_plan(
+        self,
+        *,
+        plan_id: UUID,
+    ) -> Plan | None:
+        """Return one global plan and its grants by stable identifier."""
+
+        async with self._database.session() as session:
+            model = await session.get(PlanModel, plan_id)
+            if model is None:
+                return None
+            grant_models = await session.scalars(
+                select(PlanFeatureModel)
+                .where(PlanFeatureModel.plan_id == model.id)
+                .order_by(PlanFeatureModel.feature_code)
+            )
+            return Plan(
+                id=model.id,
+                code=model.code,
+                display_name=model.display_name,
+                grants=tuple(self._grant_to_domain(grant) for grant in grant_models),
+                active=model.active,
+            )
+
     async def assign_subscription(
         self,
         subscription: Subscription,

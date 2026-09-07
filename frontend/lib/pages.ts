@@ -3,13 +3,17 @@ import type { AccessRule } from "@/lib/access";
 export type OperationalPageKind =
   | "collection"
   | "organization-create"
+  | "organization-lifecycle"
   | "owner-appointment"
   | "subscription-assignment"
   | "entitlement-override"
+  | "platform-administrators"
+  | "membership-administration"
   | "course-selection"
   | "enrollment-approvals"
   | "grade-amendment"
   | "guardian-grades"
+  | "calendar"
   | "notifications"
   | "teacher-roster"
   | "term-administration"
@@ -51,6 +55,7 @@ export const operationalPages: Readonly<
       "Review tenant lifecycle, institutional type, and current status.",
     endpoint: "/api/v1/platform/organizations",
     emptyMessage: "No organizations have been created yet.",
+    kind: "organization-lifecycle",
     access: platformAccess("organizations.platform.lifecycle"),
   },
   "/platform/organizations/new": {
@@ -63,7 +68,7 @@ export const operationalPages: Readonly<
   "/platform/owners": {
     title: "Organization owners",
     description:
-      "Appoint or recover an organization owner through a separately authorized platform action.",
+      "Appoint, recover, suspend, or revoke organization owners through separately authorized platform actions.",
     kind: "owner-appointment",
     access: platformAccess("people.platform.appoint_owner"),
   },
@@ -87,6 +92,14 @@ export const operationalPages: Readonly<
       "Set an explicit organization feature override and usage limit.",
     kind: "entitlement-override",
     access: platformAccess("entitlements.platform.manage"),
+  },
+  "/platform/administrators": {
+    title: "Platform administrators",
+    description:
+      "Assign, reactivate, or revoke global governance access without granting tenant academic access.",
+    endpoint: "/api/v1/platform/administrators",
+    kind: "platform-administrators",
+    access: platformAccess("platform_administrators.manage"),
   },
   "/platform/integrations": {
     title: "Integration status",
@@ -119,14 +132,17 @@ export const operationalPages: Readonly<
     "Programs",
     "Review academic programs and education modes.",
     "/api/v1/academics/programs",
-    "academics.curriculum.manage",
-  ),
-  "/organization/calendar": organizationPage(
-    "Academic calendar",
-    "Review organization-wide instructional and closure dates.",
-    "/api/v1/academics/calendar-events",
     "academics.structure.manage",
   ),
+  "/organization/calendar": {
+    ...organizationPage(
+      "Academic calendar",
+      "Review organization-wide instructional and closure dates.",
+      "/api/v1/academics/calendar-events",
+      "academics.structure.manage",
+    ),
+    kind: "calendar",
+  },
   "/organization/terms": {
     ...organizationPage(
       "Terms and semesters",
@@ -142,11 +158,18 @@ export const operationalPages: Readonly<
     "/api/v1/grading/scales",
     "grading.scale.manage",
   ),
+  "/organization/grade-amendments": {
+    title: "Grade amendments",
+    description:
+      "Select an authorized official grade and record an explanation-backed revision without bypassing term closure.",
+    kind: "grade-amendment",
+    access: organizationAdminAccess("grading.final_grade.revise"),
+  },
   "/organization/courses": organizationPage(
     "Courses",
     "Review courses, credit values, and offering summaries.",
     "/api/v1/academics/courses",
-    "academics.curriculum.manage",
+    "academics.structure.manage",
   ),
   "/organization/groups": organizationPage(
     "Groups and cohorts",
@@ -158,7 +181,7 @@ export const operationalPages: Readonly<
     "Rooms",
     "Review room capacity and activity-type suitability.",
     "/api/v1/academics/rooms",
-    "scheduling.read",
+    "academics.structure.manage",
   ),
   "/organization/people": organizationPage(
     "People",
@@ -166,6 +189,15 @@ export const operationalPages: Readonly<
     "/api/v1/organizations/current/people",
     "people.read",
   ),
+  "/organization/memberships": {
+    ...organizationPage(
+      "Membership administration",
+      "Manage built-in roles and explicit active, suspended, or revoked access state.",
+      "/api/v1/memberships",
+      "people.memberships.manage",
+    ),
+    kind: "membership-administration",
+  },
   "/organization/students": organizationPage(
     "Students",
     "Review active student memberships and academic profiles.",
@@ -235,18 +267,6 @@ export const operationalPages: Readonly<
       entitlements: ["moodle_integration"],
     },
   },
-  "/organization/roles": {
-    ...organizationPage(
-      "Roles and permissions",
-      "Review tenant-scoped custom authorization policy.",
-      "/api/v1/organizations/current/roles",
-      "people.memberships.manage",
-    ),
-    access: {
-      ...organizationAdminAccess("people.memberships.manage"),
-      entitlements: ["custom_roles"],
-    },
-  },
   "/student/today": {
     ...connectedSelfPage(
       "Today's schedule",
@@ -266,6 +286,7 @@ export const operationalPages: Readonly<
     title: "Course selection",
     description:
       "Submit your requested course offerings for policy evaluation and any required approval.",
+    endpoint: "/api/v1/academics/course-selection-context",
     kind: "course-selection",
     access: {
       ...selfAccess("Student"),
@@ -299,6 +320,7 @@ export const operationalPages: Readonly<
     ),
     access: {
       ...selfAccess("Student"),
+      permissions: ["integrations.moodle_deadlines.read_own"],
       entitlements: ["moodle_integration"],
     },
   },
@@ -338,18 +360,17 @@ export const operationalPages: Readonly<
     ),
     kind: "teacher-roster",
   },
-  "/teacher/grade-sync": connectedSelfPage(
-    "Final-grade synchronization",
-    "Review Moodle evidence and OwnSIS official-grade synchronization status.",
-    "/api/v1/self-service/teacher/grade-synchronization",
-    "Teacher",
-  ),
-  "/teacher/grade-amendment": {
-    title: "Grade amendment",
-    description:
-      "Record an explanation-backed revision only when your membership has explicit official-grade revision permission.",
-    kind: "grade-amendment",
-    access: selfAccess("Teacher"),
+  "/teacher/grade-sync": {
+    ...connectedSelfPage(
+      "Final-grade synchronization",
+      "Review Moodle evidence and OwnSIS official-grade synchronization status.",
+      "/api/v1/self-service/teacher/grade-synchronization",
+      "Teacher",
+    ),
+    access: {
+      ...selfAccess("Teacher"),
+      permissions: ["integrations.grade_sync.read_assigned"],
+    },
   },
   "/teacher/moodle": {
     ...connectedSelfPage(
@@ -360,6 +381,7 @@ export const operationalPages: Readonly<
     ),
     access: {
       ...selfAccess("Teacher"),
+      permissions: ["integrations.moodle_deadlines.read_own"],
       entitlements: ["moodle_integration"],
     },
   },

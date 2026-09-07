@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from entitlements.application.ports import EntitlementAuditSink
+from entitlements.application.ports import OrganizationAvailability
 from entitlements.application.service import EntitlementService
 from entitlements.infrastructure.repository import SQLAlchemyEntitlementRepository
 from entitlements.presentation.router import router
@@ -12,12 +13,14 @@ from shared.database import Database
 def create_entitlement_service(
     *,
     database: Database,
+    organizations: OrganizationAvailability,
     audit: EntitlementAuditSink,
 ) -> EntitlementService:
     """Construct centralized PostgreSQL entitlement policy and adapters."""
 
     return EntitlementService(
         repository=SQLAlchemyEntitlementRepository(database),
+        organizations=organizations,
         audit=audit,
     )
 

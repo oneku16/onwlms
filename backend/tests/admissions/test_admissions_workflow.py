@@ -13,6 +13,7 @@ import pytest
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
 from admissions.application.ports import AcceptedApplicantEnrollmentRegistrar
+from admissions.application.ports import AdmissionsAuditSink
 from admissions.application.service import ADMISSIONS_APPLICATION_CREATE
 from admissions.application.service import ADMISSIONS_APPLICATION_SUBMIT
 from admissions.application.service import ADMISSIONS_DECIDE
@@ -62,6 +63,7 @@ class AdmissionsFixture:
     organization_id: UUID
     program_id: UUID
     intake_id: UUID
+    targets: InMemoryAdmissionsTargetDirectory
     repository: InMemoryAdmissionsRepository
     registrar: AcceptedApplicantEnrollmentRegistrar
     service: AdmissionsService
@@ -107,6 +109,30 @@ class FailOnceAcademicRegistrar:
         )
 
 
+class RecordingAdmissionsAuditSink:
+    """Capture minimized decision evidence and optionally fail closed."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.events: list[tuple[str, UUID, UUID, str, str]] = []
+
+    async def record_admissions_decision_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        application_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        del actor_subject_id, correlation_id
+        if self.fail:
+            raise RuntimeError("audit unavailable")
+        self.events.append((action, organization_id, application_id, outcome, reason))
+
+
 def _context(
     *,
     organization_id: UUID,
@@ -128,6 +154,7 @@ async def _fixture(
     deposit_required: bool = False,
     deposit_satisfied: bool = True,
     registrar: AcceptedApplicantEnrollmentRegistrar | None = None,
+    audit: AdmissionsAuditSink | None = None,
 ) -> AdmissionsFixture:
     organization_id = uuid4()
     program_id = uuid4()
@@ -143,6 +170,7 @@ async def _fixture(
         registrar=effective_registrar,
         deposits=StaticDepositVerifier(satisfied=deposit_satisfied),
         clock=FakeClock(datetime(2026, 8, 5, 9, tzinfo=UTC)),
+        audit=audit or RecordingAdmissionsAuditSink(),
     )
     administrator = _context(
         organization_id=organization_id,
@@ -176,6 +204,7 @@ async def _fixture(
         organization_id=organization_id,
         program_id=program_id,
         intake_id=intake_id,
+        targets=targets,
         repository=repository,
         registrar=effective_registrar,
         service=service,
@@ -249,6 +278,35 @@ async def test_required_review_must_pass_before_acceptance() -> None:
 
     assert review.reviewer_id == reviewer.subject_id
     assert decision.reservation_id is not None
+
+
+async def test_acceptance_rejects_an_academic_intake_closed_after_submission() -> None:
+    fixture = await _fixture()
+    application = await _submitted_application(fixture, suffix="closed-intake")
+    fixture.targets.close(
+        organization_id=fixture.organization_id,
+        program_id=fixture.program_id,
+        intake_id=fixture.intake_id,
+    )
+    decision_actor = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ADMISSIONS_DECIDE}),
+    )
+
+    with pytest.raises(AdmissionsRuleError, match="closed academic intake"):
+        await fixture.service.decide_application(
+            context=decision_actor,
+            application_id=application.id,
+            outcome=AdmissionDecisionOutcome.ACCEPTED,
+            reason="The earlier submission no longer has a valid intake.",
+        )
+
+    stored = await fixture.repository.get_application(
+        organization_id=fixture.organization_id,
+        application_id=application.id,
+    )
+    assert stored is not None
+    assert stored.status is ApplicationStatus.SUBMITTED
 
 
 async def test_quota_reservation_is_atomic_under_concurrent_acceptance() -> None:
@@ -364,6 +422,56 @@ async def test_cross_tenant_application_lookup_fails_closed() -> None:
             outcome=AdmissionDecisionOutcome.REJECTED,
             reason="Unauthorized cross-tenant attempt.",
         )
+
+
+async def test_decision_audit_intent_is_durable_before_mutation() -> None:
+    audit = RecordingAdmissionsAuditSink()
+    fixture = await _fixture(audit=audit)
+    application = await _submitted_application(fixture, suffix="audited")
+    actor = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ADMISSIONS_DECIDE}),
+    )
+
+    await fixture.service.decide_application(
+        context=actor,
+        application_id=application.id,
+        outcome=AdmissionDecisionOutcome.REJECTED,
+        reason="Does not meet the published requirements.",
+    )
+
+    assert [event[0] for event in audit.events] == [
+        "admissions.application.decision_requested",
+        "admissions.application.decided",
+    ]
+    assert [event[3] for event in audit.events] == [
+        "intent_recorded",
+        "succeeded",
+    ]
+
+
+async def test_decision_aborts_when_audit_intent_cannot_be_recorded() -> None:
+    fixture = await _fixture(audit=RecordingAdmissionsAuditSink(fail=True))
+    application = await _submitted_application(fixture, suffix="audit-failure")
+    actor = _context(
+        organization_id=fixture.organization_id,
+        permissions=frozenset({ADMISSIONS_DECIDE}),
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await fixture.service.decide_application(
+            context=actor,
+            application_id=application.id,
+            outcome=AdmissionDecisionOutcome.REJECTED,
+            reason="Decision requires durable evidence.",
+        )
+
+    stored = await fixture.repository.get_application(
+        organization_id=fixture.organization_id,
+        application_id=application.id,
+    )
+    assert stored is not None
+    assert stored.status is ApplicationStatus.SUBMITTED
 
 
 async def test_unconfigured_deposit_verifier_fails_closed() -> None:

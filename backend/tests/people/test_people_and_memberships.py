@@ -1,5 +1,7 @@
 """Behavioral tests for PII serialization, multi-role access, and tenant denial."""
 
+import asyncio
+from collections.abc import Callable
 from datetime import date
 from typing import cast
 from uuid import UUID
@@ -7,18 +9,27 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import FastAPI
+from httpx import ASGITransport
+from httpx import AsyncClient
 
 from core.context import PlatformActorContext
 from core.context import TenantActorContext
 from core.errors import AuthorizationError
+from core.http import install_error_handlers
+from identity.presentation.dependencies import PLATFORM_ADMIN_PERMISSIONS
+from identity.presentation.dependencies import require_actor
+from identity.presentation.dependencies import require_csrf
 from people.application.reference_service import PeopleReferenceService
 from people.application.service import APPOINT_OWNER_PERMISSION
 from people.application.service import MANAGE_MEMBERSHIPS_PERMISSION
+from people.application.service import MANAGE_OWNER_LIFECYCLE_PERMISSION
 from people.application.service import MANAGE_PEOPLE_PERMISSION
 from people.application.service import READ_PEOPLE_PERMISSION
 from people.application.service import ContactInput
 from people.application.service import MembershipService
 from people.application.service import PeopleService
+from people.domain.exceptions import InvalidMembershipError
 from people.domain.exceptions import MembershipNotFoundError
 from people.domain.exceptions import PersonNotFoundError
 from people.domain.models import ROLE_PERMISSIONS
@@ -31,6 +42,7 @@ from people.domain.models import Person
 from people.domain.models import PersonProfile
 from people.domain.models import ProfileKind
 from people.infrastructure.repositories import SQLAlchemyPeopleRepository
+from people.presentation.router import router as people_router
 from people.presentation.router import serialize_membership_discovery
 from people.presentation.router import serialize_person_safe
 from people_adapters import PeopleSchedulingTeacherAdapter
@@ -103,6 +115,20 @@ class FakePeopleRepository:
             and profile.id in teacher_profile_ids
         )
 
+    async def existing_student_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_ids: frozenset[UUID],
+    ) -> frozenset[UUID]:
+        return frozenset(
+            profile.id
+            for profile in self.profiles.values()
+            if profile.organization_id == organization_id
+            and profile.kind is ProfileKind.STUDENT
+            and profile.id in student_profile_ids
+        )
+
     async def get_profile(
         self,
         *,
@@ -160,12 +186,61 @@ def test_national_identifier_digest_is_tenant_and_domain_separated() -> None:
 class FakeMembershipRepository:
     def __init__(self) -> None:
         self.values: dict[UUID, Membership] = {}
+        self.mutation_locks: dict[UUID, asyncio.Lock] = {}
+        self.owner_locks: dict[UUID, asyncio.Lock] = {}
 
     async def add(self, membership: Membership) -> None:
         self.values[membership.id] = membership
 
-    async def save(self, membership: Membership) -> None:
-        self.values[membership.id] = membership
+    async def mutate_existing(
+        self,
+        *,
+        organization_id: UUID,
+        membership_id: UUID,
+        mutation: Callable[[Membership], Membership],
+    ) -> Membership:
+        lock = self.mutation_locks.setdefault(membership_id, asyncio.Lock())
+        async with lock:
+            current = self.values.get(membership_id)
+            if current is None or current.organization_id != organization_id:
+                raise MembershipNotFoundError
+            updated = mutation(current)
+            self.values[membership_id] = updated
+            return updated
+
+    async def mutate_owner(
+        self,
+        *,
+        organization_id: UUID,
+        membership_id: UUID,
+        mutation: Callable[[Membership, tuple[Membership, ...]], Membership],
+    ) -> Membership:
+        lock = self.owner_locks.setdefault(organization_id, asyncio.Lock())
+        async with lock:
+            owner_memberships = tuple(
+                sorted(
+                    (
+                        membership
+                        for membership in self.values.values()
+                        if membership.organization_id == organization_id
+                        and MembershipRole.ORGANIZATION_OWNER in membership.roles
+                    ),
+                    key=lambda membership: membership.id,
+                )
+            )
+            current = next(
+                (
+                    membership
+                    for membership in owner_memberships
+                    if membership.id == membership_id
+                ),
+                None,
+            )
+            if current is None:
+                raise MembershipNotFoundError
+            updated = mutation(current, owner_memberships)
+            self.values[membership_id] = updated
+            return updated
 
     async def get(
         self,
@@ -206,6 +281,35 @@ class FakeMembershipRepository:
             and membership.status is MembershipStatus.ACTIVE
         ]
 
+    async def list_for_organization(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> list[Membership]:
+        values = [
+            membership
+            for membership in self.values.values()
+            if membership.organization_id == organization_id
+        ]
+        return values[offset : offset + limit]
+
+    async def list_owners_for_organization(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> list[Membership]:
+        values = [
+            membership
+            for membership in self.values.values()
+            if membership.organization_id == organization_id
+            and MembershipRole.ORGANIZATION_OWNER in membership.roles
+        ]
+        return values[offset : offset + limit]
+
 
 class FakeOrganizationAvailability:
     def __init__(self, active: set[UUID]) -> None:
@@ -220,6 +324,10 @@ class FakeOrganizationAvailability:
 
 
 class FakePeopleAuditSink:
+    def __init__(self, *, fail_on_action: str | None = None) -> None:
+        self.fail_on_action = fail_on_action
+        self.events: list[tuple[str, str]] = []
+
     async def record_people_event(
         self,
         *,
@@ -231,7 +339,10 @@ class FakePeopleAuditSink:
         outcome: str,
     ) -> None:
         assert action and organization_id and actor_subject_id and target_id
-        assert correlation_id and outcome == "succeeded"
+        assert correlation_id
+        if action == self.fail_on_action:
+            raise RuntimeError("audit unavailable")
+        self.events.append((action, outcome))
 
 
 class RecordingProfileActivationWriter:
@@ -257,6 +368,14 @@ def _actor(organization_id: UUID, *permissions: str) -> TenantActorContext:
         membership_id=uuid4(),
         correlation_id="correlation-1",
         permissions=frozenset(permissions),
+    )
+
+
+def _platform_owner_actor() -> PlatformActorContext:
+    return PlatformActorContext(
+        subject_id=uuid4(),
+        correlation_id="correlation-1",
+        permissions=frozenset({MANAGE_OWNER_LIFECYCLE_PERMISSION}),
     )
 
 
@@ -551,6 +670,472 @@ async def test_platform_owner_recovery_preserves_existing_membership_roles() -> 
     )
 
 
+async def test_platform_owner_lifecycle_is_audited_and_revocation_is_terminal() -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    target = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+    )
+    replacement = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.ORGANIZATION_OWNER, MembershipRole.STAFF}),
+    )
+    memberships.values = {
+        target.id: target,
+        replacement.id: replacement,
+    }
+    audit = FakePeopleAuditSink()
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=audit,
+    )
+    actor = _platform_owner_actor()
+
+    suspended = await service.suspend_organization_owner(
+        actor=actor,
+        organization_id=organization_id,
+        membership_id=target.id,
+    )
+    revoked = await service.revoke_organization_owner(
+        actor=actor,
+        organization_id=organization_id,
+        membership_id=target.id,
+    )
+
+    assert suspended.status is MembershipStatus.SUSPENDED
+    assert revoked.status is MembershipStatus.REVOKED
+    assert revoked.roles == target.roles
+    assert memberships.values[replacement.id].status is MembershipStatus.ACTIVE
+    assert audit.events == [
+        ("membership.owner_suspension_intent", "intent_recorded"),
+        ("membership.owner_suspended", "succeeded"),
+        ("membership.owner_revocation_intent", "intent_recorded"),
+        ("membership.owner_revoked", "succeeded"),
+    ]
+    with pytest.raises(InvalidMembershipError, match="already revoked"):
+        await service.revoke_organization_owner(
+            actor=actor,
+            organization_id=organization_id,
+            membership_id=target.id,
+        )
+
+
+async def test_owner_lifecycle_intent_audit_failure_aborts_mutation() -> None:
+    organization_id = uuid4()
+    owners = tuple(
+        Membership(
+            id=uuid4(),
+            organization_id=organization_id,
+            identity_subject_id=uuid4(),
+            person_id=None,
+            roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+        )
+        for _ in range(2)
+    )
+    memberships = FakeMembershipRepository()
+    memberships.values = {owner.id: owner for owner in owners}
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=FakePeopleAuditSink(fail_on_action="membership.owner_suspension_intent"),
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await service.suspend_organization_owner(
+            actor=_platform_owner_actor(),
+            organization_id=organization_id,
+            membership_id=owners[0].id,
+        )
+
+    assert memberships.values[owners[0].id].status is MembershipStatus.ACTIVE
+
+
+@pytest.mark.parametrize("operation", ["suspend", "revoke"])
+async def test_platform_cannot_remove_the_only_active_owner(operation: str) -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    owner = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+    )
+    memberships.values[owner.id] = owner
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=FakePeopleAuditSink(),
+    )
+
+    with pytest.raises(InvalidMembershipError, match="at least one active owner"):
+        await getattr(service, f"{operation}_organization_owner")(
+            actor=_platform_owner_actor(),
+            organization_id=organization_id,
+            membership_id=owner.id,
+        )
+
+    assert memberships.values[owner.id].status is MembershipStatus.ACTIVE
+
+
+async def test_platform_owner_lifecycle_rejects_wrong_target() -> None:
+    organization_id = uuid4()
+    other_organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    non_owner = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.STAFF}),
+    )
+    other_owner = Membership(
+        id=uuid4(),
+        organization_id=other_organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+    )
+    memberships.values = {
+        non_owner.id: non_owner,
+        other_owner.id: other_owner,
+    }
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability(
+            {organization_id, other_organization_id}
+        ),
+        audit=FakePeopleAuditSink(),
+    )
+    actor = _platform_owner_actor()
+
+    with pytest.raises(InvalidMembershipError, match="not an organization owner"):
+        await service.suspend_organization_owner(
+            actor=actor,
+            organization_id=organization_id,
+            membership_id=non_owner.id,
+        )
+    with pytest.raises(MembershipNotFoundError):
+        await service.revoke_organization_owner(
+            actor=actor,
+            organization_id=organization_id,
+            membership_id=other_owner.id,
+        )
+
+
+@pytest.mark.parametrize("operation", ["suspend", "revoke"])
+async def test_concurrent_owner_removals_leave_one_active_owner_in_memory(
+    operation: str,
+) -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    owners = tuple(
+        Membership(
+            id=uuid4(),
+            organization_id=organization_id,
+            identity_subject_id=uuid4(),
+            person_id=None,
+            roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+        )
+        for _ in range(2)
+    )
+    memberships.values = {owner.id: owner for owner in owners}
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=FakePeopleAuditSink(),
+    )
+    actor = _platform_owner_actor()
+
+    results = await asyncio.gather(
+        *(
+            getattr(service, f"{operation}_organization_owner")(
+                actor=actor,
+                organization_id=organization_id,
+                membership_id=owner.id,
+            )
+            for owner in owners
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, Membership) for result in results) == 1
+    assert sum(isinstance(result, InvalidMembershipError) for result in results) == 1
+    assert (
+        sum(
+            membership.status is MembershipStatus.ACTIVE
+            for membership in memberships.values.values()
+        )
+        == 1
+    )
+
+
+def test_owner_lifecycle_permission_is_not_granted_by_any_tenant_role() -> None:
+    assert MANAGE_OWNER_LIFECYCLE_PERMISSION in PLATFORM_ADMIN_PERMISSIONS
+    assert all(
+        MANAGE_OWNER_LIFECYCLE_PERMISSION not in permissions
+        for permissions in ROLE_PERMISSIONS.values()
+    )
+
+
+async def test_platform_owner_lifecycle_api_is_safe_and_exact_tenant_scoped() -> None:
+    organization_id = uuid4()
+    other_organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    owners = tuple(
+        Membership(
+            id=uuid4(),
+            organization_id=organization_id,
+            identity_subject_id=uuid4(),
+            person_id=uuid4(),
+            roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+        )
+        for _ in range(2)
+    )
+    other_owner = Membership(
+        id=uuid4(),
+        organization_id=other_organization_id,
+        identity_subject_id=uuid4(),
+        person_id=uuid4(),
+        roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+    )
+    memberships.values = {
+        membership.id: membership for membership in (*owners, other_owner)
+    }
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability(
+            {organization_id, other_organization_id}
+        ),
+        audit=FakePeopleAuditSink(),
+    )
+    actor = _platform_owner_actor()
+    app = FastAPI()
+    install_error_handlers(app)
+    app.state.membership_service = service
+    app.include_router(people_router)
+
+    async def actor_override() -> PlatformActorContext:
+        return actor
+
+    async def csrf_override() -> None:
+        return None
+
+    app.dependency_overrides[require_actor] = actor_override
+    app.dependency_overrides[require_csrf] = csrf_override
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        listed = await client.get(
+            f"/api/v1/platform/organizations/{organization_id}/owners"
+        )
+        suspended = await client.post(
+            "/api/v1/platform/organizations/"
+            f"{organization_id}/owners/{owners[0].id}/suspend"
+        )
+        cross_tenant = await client.post(
+            "/api/v1/platform/organizations/"
+            f"{organization_id}/owners/{other_owner.id}/revoke"
+        )
+
+    assert listed.status_code == 200
+    assert len(listed.json()) == 2
+    assert all(
+        set(owner) == {"id", "organization_id", "status"} for owner in listed.json()
+    )
+    assert suspended.status_code == 200
+    assert suspended.json()["status"] == "suspended"
+    assert cross_tenant.status_code == 404
+
+
+async def test_membership_lifecycle_is_audited() -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    original = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.STAFF}),
+    )
+    memberships.values[original.id] = original
+    audit = FakePeopleAuditSink()
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=audit,
+    )
+    actor = _actor(organization_id, MANAGE_MEMBERSHIPS_PERMISSION)
+
+    suspended = await service.suspend(actor=actor, membership_id=original.id)
+    assert suspended.status is MembershipStatus.SUSPENDED
+    active = await service.reactivate(actor=actor, membership_id=original.id)
+    assert active.status is MembershipStatus.ACTIVE
+    revoked = await service.revoke(actor=actor, membership_id=original.id)
+
+    assert revoked.status is MembershipStatus.REVOKED
+    assert audit.events == [
+        ("membership.suspension_intent", "intent_recorded"),
+        ("membership.suspended", "succeeded"),
+        ("membership.reactivation_intent", "intent_recorded"),
+        ("membership.reactivated", "succeeded"),
+        ("membership.revocation_intent", "intent_recorded"),
+        ("membership.revoked", "succeeded"),
+    ]
+
+
+@pytest.mark.parametrize("operation", ["suspend", "reactivate", "revoke"])
+async def test_tenant_membership_manager_cannot_mutate_owner_lifecycle(
+    operation: str,
+) -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    owner = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.ORGANIZATION_OWNER}),
+        status=(
+            MembershipStatus.SUSPENDED
+            if operation == "reactivate"
+            else MembershipStatus.ACTIVE
+        ),
+    )
+    memberships.values[owner.id] = owner
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=FakePeopleAuditSink(),
+    )
+
+    with pytest.raises(AuthorizationError):
+        await getattr(service, operation)(
+            actor=_actor(organization_id, MANAGE_MEMBERSHIPS_PERMISSION),
+            membership_id=owner.id,
+        )
+
+
+async def test_membership_intent_audit_failure_aborts_mutation() -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    membership = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.STAFF}),
+    )
+    memberships.values[membership.id] = membership
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=FakePeopleAuditSink(fail_on_action="membership.suspension_intent"),
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await service.suspend(
+            actor=_actor(organization_id, MANAGE_MEMBERSHIPS_PERMISSION),
+            membership_id=membership.id,
+        )
+
+    assert memberships.values[membership.id].status is MembershipStatus.ACTIVE
+
+
+async def test_revocation_immediately_denies_the_revoked_tenant_context() -> None:
+    organization_id = uuid4()
+    memberships = FakeMembershipRepository()
+    membership = Membership(
+        id=uuid4(),
+        organization_id=organization_id,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.STAFF}),
+    )
+    memberships.values[membership.id] = membership
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_id}),
+        audit=FakePeopleAuditSink(),
+    )
+
+    await service.revoke(
+        actor=_actor(organization_id, MANAGE_MEMBERSHIPS_PERMISSION),
+        membership_id=membership.id,
+    )
+
+    assert memberships.values[membership.id].status is MembershipStatus.REVOKED
+    with pytest.raises(MembershipNotFoundError):
+        await service.resolve_tenant_context(
+            identity_subject_id=membership.identity_subject_id,
+            organization_id=organization_id,
+            correlation_id="correlation-2",
+        )
+
+
+async def test_revocation_does_not_remove_another_tenant_membership() -> None:
+    organization_a = uuid4()
+    organization_b = uuid4()
+    subject_id = uuid4()
+    memberships = FakeMembershipRepository()
+    membership_a = Membership(
+        id=uuid4(),
+        organization_id=organization_a,
+        identity_subject_id=subject_id,
+        person_id=None,
+        roles=frozenset({MembershipRole.STAFF}),
+    )
+    membership_b = Membership(
+        id=uuid4(),
+        organization_id=organization_b,
+        identity_subject_id=subject_id,
+        person_id=None,
+        roles=frozenset({MembershipRole.STUDENT}),
+    )
+    memberships.values = {
+        membership_a.id: membership_a,
+        membership_b.id: membership_b,
+    }
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_a, organization_b}),
+        audit=FakePeopleAuditSink(),
+    )
+
+    await service.revoke(
+        actor=_actor(organization_a, MANAGE_MEMBERSHIPS_PERMISSION),
+        membership_id=membership_a.id,
+    )
+
+    actor_b = await service.resolve_tenant_context(
+        identity_subject_id=subject_id,
+        organization_id=organization_b,
+        correlation_id="correlation-2",
+    )
+    assert actor_b.membership_id == membership_b.id
+
+
 async def test_context_resolution_denies_membership_from_another_tenant() -> None:
     organization_a = uuid4()
     organization_b = uuid4()
@@ -576,6 +1161,51 @@ async def test_context_resolution_denies_membership_from_another_tenant() -> Non
             identity_subject_id=subject_id,
             organization_id=organization_a,
             correlation_id="correlation-1",
+        )
+
+
+async def test_membership_directory_is_authorized_and_tenant_scoped() -> None:
+    organization_a = uuid4()
+    organization_b = uuid4()
+    memberships = FakeMembershipRepository()
+    membership_a = Membership(
+        id=uuid4(),
+        organization_id=organization_a,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.STAFF}),
+        status=MembershipStatus.SUSPENDED,
+    )
+    membership_b = Membership(
+        id=uuid4(),
+        organization_id=organization_b,
+        identity_subject_id=uuid4(),
+        person_id=None,
+        roles=frozenset({MembershipRole.STUDENT}),
+    )
+    memberships.values = {
+        membership_a.id: membership_a,
+        membership_b.id: membership_b,
+    }
+    service = MembershipService(
+        memberships=memberships,
+        people=FakePeopleRepository(),
+        organizations=FakeOrganizationAvailability({organization_a, organization_b}),
+        audit=FakePeopleAuditSink(),
+    )
+
+    listed = await service.list_memberships(
+        actor=_actor(organization_a, MANAGE_MEMBERSHIPS_PERMISSION),
+        limit=50,
+        offset=0,
+    )
+    assert listed == [membership_a]
+
+    with pytest.raises(AuthorizationError):
+        await service.list_memberships(
+            actor=_actor(organization_a, READ_PEOPLE_PERMISSION),
+            limit=50,
+            offset=0,
         )
 
 
@@ -615,6 +1245,7 @@ async def test_discovery_returns_only_active_memberships_for_verified_subject() 
     payload = serialize_membership_discovery(expected)
     assert "identity_subject_id" not in payload
     assert "person_id" not in payload
+    assert payload["permissions"] == sorted(expected.permissions)
 
 
 async def test_discovery_excludes_membership_in_suspended_organization() -> None:

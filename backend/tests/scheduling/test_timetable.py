@@ -14,6 +14,7 @@ from fastapi.routing import APIRoute
 from core.context import TenantActorContext
 from core.errors import AuthorizationError
 from core.errors import NotFoundError
+from scheduling.application.contracts import ExistingSchedulingReferences
 from scheduling.application.generator import DeterministicHeuristicSchedulingGenerator
 from scheduling.application.service import SCHEDULING_APPLY_GENERATION
 from scheduling.application.service import SCHEDULING_GENERATE
@@ -36,6 +37,7 @@ from scheduling.domain.models import ScheduleGenerationResult
 from scheduling.domain.models import SchedulingPolicy
 from scheduling.domain.models import TeacherAvailability
 from scheduling.domain.models import TimeWindow
+from scheduling.infrastructure.repository import InMemorySchedulingAuditSink
 from scheduling.infrastructure.repository import InMemorySchedulingRepository
 from scheduling.infrastructure.repository import InMemorySchedulingResourceDirectory
 from scheduling.presentation.router import SessionMoveBody
@@ -76,6 +78,27 @@ class RecordingSchedulingResourceDirectory:
     ) -> ConstraintContext:
         self.requests.append((organization_id, starts_at, ends_at, teacher_ids))
         return self._context
+
+
+class EchoSchedulingReferenceDirectory:
+    """Treat every requested identifier as an exact known test reference."""
+
+    async def existing_references(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        group_ids: frozenset[UUID],
+        teacher_ids: frozenset[UUID],
+    ) -> ExistingSchedulingReferences:
+        return ExistingSchedulingReferences(
+            organization_id=organization_id,
+            room_ids=room_ids,
+            course_offering_ids=course_offering_ids,
+            group_ids=group_ids,
+            teacher_ids=teacher_ids,
+        )
 
 
 def _context(
@@ -227,6 +250,8 @@ async def test_manual_session_creation_detects_conflicts_immediately() -> None:
     service = TimetableService(
         repository=InMemorySchedulingRepository(),
         resources=InMemorySchedulingResourceDirectory((constraints,)),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
     )
     actor = _context(
@@ -290,6 +315,8 @@ async def test_recurring_create_loads_constraints_through_final_occurrence_end()
     service = TimetableService(
         repository=InMemorySchedulingRepository(),
         resources=resources,
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
     )
 
@@ -344,6 +371,8 @@ async def test_recurring_apply_loads_constraints_through_final_occurrence_end() 
     service = TimetableService(
         repository=InMemorySchedulingRepository(),
         resources=resources,
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
         entitlements=StaticTimetableGenerationEntitlement(enabled=True),
     )
@@ -368,6 +397,154 @@ async def test_recurring_apply_loads_constraints_through_final_occurrence_end() 
     ]
 
 
+async def test_generated_replacement_derives_persisted_locks_without_client_ids() -> (
+    None
+):
+    organization_id = uuid4()
+    starts_at = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    persisted_locked = _session(
+        organization_id=organization_id,
+        room_id=uuid4(),
+        teacher_id=uuid4(),
+        group_id=uuid4(),
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+        locked=True,
+    )
+    repository = InMemorySchedulingRepository()
+    await repository.save_session(session=persisted_locked, expected_version=None)
+
+    with pytest.raises(ScheduleVersionConflictError, match="changed a locked"):
+        await repository.replace_generated_schedule(
+            organization_id=organization_id,
+            proposed_sessions=(),
+            locked_session_ids=frozenset(),
+            expected_versions={persisted_locked.id: persisted_locked.version},
+            constraints=ConstraintContext(
+                organization_id=organization_id,
+                rooms=(),
+                teacher_availability=(),
+                academic_calendar_windows=(),
+            ),
+        )
+
+    assert (
+        await repository.get_session(
+            organization_id=organization_id,
+            session_id=persisted_locked.id,
+        )
+        == persisted_locked
+    )
+
+
+async def test_generated_replacement_assigns_server_versions() -> None:
+    organization_id = uuid4()
+    room_id = uuid4()
+    first_teacher_id = uuid4()
+    second_teacher_id = uuid4()
+    first_group_id = uuid4()
+    second_group_id = uuid4()
+    starts_at = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    current = _session(
+        organization_id=organization_id,
+        room_id=room_id,
+        teacher_id=first_teacher_id,
+        group_id=first_group_id,
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+    proposed_existing = replace(
+        current,
+        teacher_ids=(second_teacher_id,),
+        group_ids=(second_group_id,),
+        required_group_ids=(second_group_id,),
+        starts_at=starts_at + timedelta(hours=1),
+        ends_at=starts_at + timedelta(hours=2),
+    )
+    repository = InMemorySchedulingRepository()
+    await repository.save_session(session=current, expected_version=None)
+    constraints = _constraint_context(
+        organization_id=organization_id,
+        room_id=room_id,
+        teacher_ids=(second_teacher_id,),
+        calendar_start=starts_at,
+        calendar_end=starts_at + timedelta(hours=4),
+    )
+    service = TimetableService(
+        repository=repository,
+        resources=InMemorySchedulingResourceDirectory((constraints,)),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
+        generator=DeterministicHeuristicSchedulingGenerator(),
+        entitlements=StaticTimetableGenerationEntitlement(enabled=True),
+    )
+
+    with pytest.raises(ScheduleVersionConflictError, match="changed a locked"):
+        await repository.replace_generated_schedule(
+            organization_id=organization_id,
+            proposed_sessions=(proposed_existing,),
+            locked_session_ids=frozenset({current.id}),
+            expected_versions={current.id: 0},
+            constraints=constraints,
+        )
+
+    with pytest.raises(ScheduleVersionConflictError, match="invalid session version"):
+        await repository.replace_generated_schedule(
+            organization_id=organization_id,
+            proposed_sessions=(replace(proposed_existing, version=1),),
+            locked_session_ids=frozenset(),
+            expected_versions={current.id: 0},
+            constraints=constraints,
+        )
+
+    first_replacement = await service.apply_proposal(
+        context=_context(
+            organization_id=organization_id,
+            permissions=frozenset({SCHEDULING_APPLY_GENERATION}),
+        ),
+        proposed_sessions=(proposed_existing,),
+        locked_session_ids=frozenset(),
+        expected_versions={current.id: 0},
+    )
+    second_replacement = await repository.replace_generated_schedule(
+        organization_id=organization_id,
+        proposed_sessions=first_replacement,
+        locked_session_ids=frozenset(),
+        expected_versions={current.id: 1},
+        constraints=constraints,
+    )
+
+    assert first_replacement == (replace(proposed_existing, version=1),)
+    assert second_replacement == (replace(proposed_existing, version=2),)
+    assert (
+        await repository.get_session(
+            organization_id=organization_id,
+            session_id=current.id,
+        )
+        == second_replacement[0]
+    )
+
+    malformed_new = replace(
+        _session(
+            organization_id=organization_id,
+            room_id=room_id,
+            teacher_id=second_teacher_id,
+            group_id=second_group_id,
+            starts_at=starts_at + timedelta(hours=2),
+            ends_at=starts_at + timedelta(hours=3),
+        ),
+        version=1,
+    )
+    with pytest.raises(ScheduleVersionConflictError, match="version zero"):
+        await repository.replace_generated_schedule(
+            organization_id=organization_id,
+            proposed_sessions=(second_replacement[0], malformed_new),
+            locked_session_ids=frozenset(),
+            expected_versions={current.id: 2},
+            constraints=constraints,
+        )
+
+
 async def test_generator_is_deterministic_and_preserves_locked_sessions() -> None:
     organization_id = uuid4()
     room_id = uuid4()
@@ -387,6 +564,8 @@ async def test_generator_is_deterministic_and_preserves_locked_sessions() -> Non
     service = TimetableService(
         repository=repository,
         resources=InMemorySchedulingResourceDirectory((constraints,)),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
         entitlements=StaticTimetableGenerationEntitlement(enabled=True),
     )
@@ -651,6 +830,8 @@ async def test_generator_returns_unresolved_conflict_and_explained_score() -> No
     service = TimetableService(
         repository=InMemorySchedulingRepository(),
         resources=InMemorySchedulingResourceDirectory((constraints,)),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
         entitlements=StaticTimetableGenerationEntitlement(enabled=True),
     )
@@ -708,6 +889,8 @@ async def test_generation_and_proposal_apply_fail_closed_without_entitlement() -
     service = TimetableService(
         repository=InMemorySchedulingRepository(),
         resources=InMemorySchedulingResourceDirectory(),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
     )
 
@@ -745,6 +928,8 @@ async def test_manual_cross_tenant_resource_mismatch_fails_closed() -> None:
     service = TimetableService(
         repository=InMemorySchedulingRepository(),
         resources=InMemorySchedulingResourceDirectory((constraints,)),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
     )
     actor = _context(
@@ -783,6 +968,8 @@ async def test_drag_drop_move_preserves_room_and_requires_current_version() -> N
                 ),
             )
         ),
+        references=EchoSchedulingReferenceDirectory(),
+        audit=InMemorySchedulingAuditSink(),
         generator=DeterministicHeuristicSchedulingGenerator(),
     )
     actor = _context(

@@ -9,6 +9,7 @@ from academics.application.admissions_enrollment_service import (
     AcceptedStudentAcademicEnrollmentService,
 )
 from academics.application.ports import AcademicAuditSink
+from academics.application.ports import AcademicProfileDirectory
 from academics.application.ports import CampusDirectory
 from academics.application.ports import CourseSelectionStudentOwnership
 from academics.application.reference_service import AcademicReferenceService
@@ -43,6 +44,7 @@ def create_academic_services(
     *,
     database: Database,
     campuses: CampusDirectory,
+    profiles: AcademicProfileDirectory,
     audit: AcademicAuditSink,
     ownership: CourseSelectionStudentOwnership,
 ) -> AcademicServices:
@@ -53,6 +55,7 @@ def create_academic_services(
         administration=AcademicAdministrationService(
             catalog=repository,
             campuses=campuses,
+            profiles=profiles,
             audit=audit,
         ),
         course_selection=CourseSelectionService(
