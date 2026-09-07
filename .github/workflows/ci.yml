@@ -50,7 +50,7 @@ jobs:
       - run: uv run --project backend python scripts/export_openapi.py --check
       - run: uv run --project backend ruff check backend/src backend/tests
       - run: uv run --project backend ruff format --check backend/src backend/tests
-      - run: uv run --project backend mypy backend/src backend/tests
+      - run: uv run --project backend mypy --config-file backend/pyproject.toml backend/src backend/tests
       - run: uv run --project backend alembic -c backend/alembic.ini upgrade head
       - run: uv run --project backend alembic -c backend/alembic.ini current --check-heads
       - run: uv run --project backend alembic -c backend/alembic.ini check

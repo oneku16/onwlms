@@ -1,0 +1,4 @@
+# Unified diffs carry a leading space on context lines for blank lines, so
+# trailing-whitespace checks would always flag them. Exempt patch files.
+*.diff -whitespace
+*.patch -whitespace
