@@ -61,7 +61,7 @@ force-single-line = true
 [tool.mypy]
 python_version = "3.14"
 strict = true
-mypy_path = "src"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
 packages = [
     "core",
     "shared",
