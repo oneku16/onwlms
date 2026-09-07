@@ -5,7 +5,10 @@ from scheduling.application import SCHEDULING_GENERATE
 from scheduling.application import SCHEDULING_READ
 from scheduling.application import SCHEDULING_SESSION_MANAGE
 from scheduling.application import DeterministicHeuristicSchedulingGenerator
+from scheduling.application import ExistingSchedulingReferences
+from scheduling.application import SchedulingAuditSink
 from scheduling.application import SchedulingGenerator
+from scheduling.application import SchedulingReferenceDirectory
 from scheduling.application import SchedulingRepository
 from scheduling.application import SchedulingResourceDirectory
 from scheduling.application import TimetableService
@@ -22,11 +25,14 @@ __all__ = [
     "SCHEDULING_SESSION_MANAGE",
     "ConstraintContext",
     "DeterministicHeuristicSchedulingGenerator",
+    "ExistingSchedulingReferences",
     "HardConflict",
     "ScheduleGenerationRequest",
     "ScheduleGenerationResult",
     "ScheduledSession",
+    "SchedulingAuditSink",
     "SchedulingGenerator",
+    "SchedulingReferenceDirectory",
     "SchedulingRepository",
     "SchedulingResourceDirectory",
     "TimetableService",

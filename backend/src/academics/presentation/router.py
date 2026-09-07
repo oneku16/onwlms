@@ -16,6 +16,10 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from academics.application.read_models import CourseSelectionEnrollmentOption
+from academics.application.read_models import CourseSelectionOfferingOption
+from academics.application.read_models import CourseSelectionTermOption
+from academics.application.read_models import StudentCourseSelectionContext
 from academics.application.service import MAX_TERM_CLOSURE_EXPLANATION_LENGTH
 from academics.application.service import AcademicAdministrationService
 from academics.application.service import CourseSelectionService
@@ -308,16 +312,18 @@ class TeacherAssignmentResponse(TeacherAssignmentBody):
 
 
 class StudentEnrollmentBody(_FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     student_id: UUID
     program_id: UUID
     academic_year_id: UUID
     cohort_id: UUID | None = None
-    status: AcademicEnrollmentStatus = AcademicEnrollmentStatus.ACTIVE
     enrolled_at: datetime
 
 
 class StudentEnrollmentResponse(StudentEnrollmentBody):
     id: UUID
+    status: AcademicEnrollmentStatus
 
     @classmethod
     def from_domain(cls, value: StudentAcademicEnrollment) -> StudentEnrollmentResponse:
@@ -428,6 +434,128 @@ class CourseSelectionResponse(_FrozenModel):
                 else ()
             ),
             rejection_reason=value.rejection_reason,
+        )
+
+
+class CourseSelectionOfferingOptionResponse(_FrozenModel):
+    """Serialize one curriculum-backed selectable course offering."""
+
+    id: UUID
+    course_id: UUID
+    course_code: str
+    course_title: str
+    section_code: str
+    credits: Decimal
+    capacity: int
+    meeting_windows: tuple[MeetingWindowBody, ...]
+
+    @classmethod
+    def from_application(
+        cls,
+        value: CourseSelectionOfferingOption,
+    ) -> CourseSelectionOfferingOptionResponse:
+        """Map one owned selection offering to its safe response."""
+
+        return cls(
+            id=value.id,
+            course_id=value.course_id,
+            course_code=value.course_code,
+            course_title=value.course_title,
+            section_code=value.section_code,
+            credits=value.credits,
+            capacity=value.capacity,
+            meeting_windows=tuple(
+                MeetingWindowBody(
+                    weekday=meeting.weekday,
+                    starts_at=meeting.starts_at,
+                    ends_at=meeting.ends_at,
+                )
+                for meeting in value.meeting_windows
+            ),
+        )
+
+
+class CourseSelectionTermOptionResponse(_FrozenModel):
+    """Serialize one open term and its bounded selectable offerings."""
+
+    id: UUID
+    name: str
+    starts_on: date
+    ends_on: date
+    deadline: datetime
+    maximum_credits: Decimal
+    approval_required: bool
+    offerings: tuple[CourseSelectionOfferingOptionResponse, ...]
+
+    @classmethod
+    def from_application(
+        cls,
+        value: CourseSelectionTermOption,
+    ) -> CourseSelectionTermOptionResponse:
+        """Map one owned selection term to its safe response."""
+
+        return cls(
+            id=value.id,
+            name=value.name,
+            starts_on=value.starts_on,
+            ends_on=value.ends_on,
+            deadline=value.deadline,
+            maximum_credits=value.maximum_credits,
+            approval_required=value.approval_required,
+            offerings=tuple(
+                CourseSelectionOfferingOptionResponse.from_application(offering)
+                for offering in value.offerings
+            ),
+        )
+
+
+class CourseSelectionEnrollmentOptionResponse(_FrozenModel):
+    """Serialize one actor-owned active enrollment and selectable terms."""
+
+    id: UUID
+    program_id: UUID
+    program_name: str
+    academic_year_id: UUID
+    terms: tuple[CourseSelectionTermOptionResponse, ...]
+
+    @classmethod
+    def from_application(
+        cls,
+        value: CourseSelectionEnrollmentOption,
+    ) -> CourseSelectionEnrollmentOptionResponse:
+        """Map one owned enrollment to its safe response."""
+
+        return cls(
+            id=value.id,
+            program_id=value.program_id,
+            program_name=value.program_name,
+            academic_year_id=value.academic_year_id,
+            terms=tuple(
+                CourseSelectionTermOptionResponse.from_application(term)
+                for term in value.terms
+            ),
+        )
+
+
+class StudentCourseSelectionContextResponse(_FrozenModel):
+    """Serialize bounded choices discovered for the current student actor."""
+
+    student_profile_id: UUID
+    enrollments: tuple[CourseSelectionEnrollmentOptionResponse, ...]
+
+    @classmethod
+    def from_application(
+        cls,
+        value: StudentCourseSelectionContext,
+    ) -> StudentCourseSelectionContextResponse:
+        """Map exact actor-owned selection context to its safe response."""
+
+        return cls(
+            student_profile_id=value.student_profile_id,
+            enrollments=tuple(
+                CourseSelectionEnrollmentOptionResponse.from_application(enrollment)
+                for enrollment in value.enrollments
+            ),
         )
 
 
@@ -832,7 +960,10 @@ async def create_student_enrollment(
 ) -> StudentEnrollmentResponse:
     context = _tenant_actor(actor)
     value = StudentAcademicEnrollment(
-        id=new_uuid7(), organization_id=context.organization_id, **body.model_dump()
+        id=new_uuid7(),
+        organization_id=context.organization_id,
+        status=AcademicEnrollmentStatus.ACTIVE,
+        **body.model_dump(),
     )
     await _administration_service(request).enroll_student(
         context=context, enrollment=value
@@ -935,6 +1066,22 @@ async def get_selection_policy(
     return SelectionPolicyResponse.from_domain(value)
 
 
+@router.get(
+    "/course-selection-context",
+    response_model=StudentCourseSelectionContextResponse,
+)
+async def student_course_selection_context(
+    request: Request,
+    actor: ActorDep,
+) -> StudentCourseSelectionContextResponse:
+    """Return real tenant-owned selection choices for the current student."""
+
+    value = await _selection_service(request).student_context(
+        context=_tenant_actor(actor),
+    )
+    return StudentCourseSelectionContextResponse.from_application(value)
+
+
 @router.post(
     "/course-selection-requests",
     response_model=CourseSelectionResponse,
@@ -1000,14 +1147,19 @@ async def decide_course_selection(
 
 
 cast(object, create_faculty)
+cast(object, student_course_selection_context)
 cast(object, submit_course_selection)
 
 __all__ = [
     "CourseSelectionDecisionBody",
+    "CourseSelectionEnrollmentOptionResponse",
+    "CourseSelectionOfferingOptionResponse",
     "CourseSelectionResponse",
     "CourseSelectionSubmissionBody",
+    "CourseSelectionTermOptionResponse",
     "CurriculumBody",
     "SelectionPolicyBody",
+    "StudentCourseSelectionContextResponse",
     "StudentEnrollmentBody",
     "TermClosureBody",
     "router",

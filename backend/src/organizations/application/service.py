@@ -58,6 +58,11 @@ class OrganizationService:
             branding=branding,
             configuration=configuration,
         )
+        await self._record_intent(
+            action="organization.creation_requested",
+            organization_id=organization.id,
+            actor=actor,
+        )
         await self._organizations.add(organization)
         await self._audit.record_organization_event(
             action="organization.created",
@@ -91,6 +96,11 @@ class OrganizationService:
         self._require_platform_permission(actor, LIFECYCLE_PERMISSION)
         organization = await self._get_platform(organization_id=organization_id)
         suspended = organization.suspend()
+        await self._record_intent(
+            action="organization.suspension_requested",
+            organization_id=organization_id,
+            actor=actor,
+        )
         await self._organizations.save_platform(suspended)
         await self._audit.record_organization_event(
             action="organization.suspended",
@@ -112,6 +122,11 @@ class OrganizationService:
         self._require_platform_permission(actor, LIFECYCLE_PERMISSION)
         organization = await self._get_platform(organization_id=organization_id)
         active = organization.reactivate()
+        await self._record_intent(
+            action="organization.reactivation_requested",
+            organization_id=organization_id,
+            actor=actor,
+        )
         await self._organizations.save_platform(active)
         await self._audit.record_organization_event(
             action="organization.reactivated",
@@ -152,6 +167,11 @@ class OrganizationService:
             branding=branding,
             configuration=configuration,
         )
+        await self._record_intent(
+            action="organization.configuration_update_requested",
+            organization_id=actor.organization_id,
+            actor=actor,
+        )
         await self._organizations.save_tenant(configured)
         await self._audit.record_organization_event(
             action="organization.configured",
@@ -177,6 +197,11 @@ class OrganizationService:
             organization_id=actor.organization_id,
             code=code,
             name=name,
+        )
+        await self._record_intent(
+            action="campus.creation_requested",
+            organization_id=actor.organization_id,
+            actor=actor,
         )
         await self._campuses.add(campus)
         await self._audit.record_organization_event(
@@ -232,6 +257,23 @@ class OrganizationService:
             campus_id=campus_id,
         )
         return campus is not None and campus.active
+
+    async def _record_intent(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor: PlatformActorContext | TenantActorContext,
+    ) -> None:
+        """Persist authorized intent before a separately committed mutation."""
+
+        await self._audit.record_organization_event(
+            action=action,
+            organization_id=organization_id,
+            actor_subject_id=actor.subject_id,
+            correlation_id=actor.correlation_id,
+            outcome="intent_recorded",
+        )
 
     async def is_active(
         self,

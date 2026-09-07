@@ -157,6 +157,8 @@ class FinalGrade:
     recorded_by: UUID
     recorded_at: datetime
     updated_at: datetime
+    recorded_after_term_closure: bool = False
+    recording_explanation: str | None = None
 
     def __post_init__(self) -> None:
         """Require coherent credits, GPA values, revision, and aware times."""
@@ -181,6 +183,15 @@ class FinalGrade:
             raise GradingRuleError("Grade revision number cannot be negative.")
         _require_aware(self.recorded_at, "Final grade recorded time")
         _require_aware(self.updated_at, "Final grade updated time")
+        if self.recorded_after_term_closure:
+            if not (self.recording_explanation or "").strip():
+                raise GradingRuleError(
+                    "A post-closure final grade explanation is required."
+                )
+        elif self.recording_explanation is not None:
+            raise GradingRuleError(
+                "An initial grade explanation is reserved for post-closure records."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +225,18 @@ class GradeRevision:
         if not self.explanation.strip():
             raise GradingRuleError("Grade revision explanation is required.")
         _require_aware(self.revised_at, "Grade revision time")
+
+
+@dataclass(frozen=True, slots=True)
+class FinalGradeHistory:
+    """Expose immutable initial-record evidence with amendment history."""
+
+    final_grade_id: UUID
+    recorded_by: UUID
+    recorded_at: datetime
+    recorded_after_term_closure: bool
+    recording_explanation: str | None
+    revisions: tuple[GradeRevision, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +397,7 @@ def _require_aware(
 
 __all__ = [
     "FinalGrade",
+    "FinalGradeHistory",
     "GpaSummary",
     "GradeBand",
     "GradeOutcome",

@@ -9,6 +9,8 @@ from core.errors import AuthorizationError
 from core.identifiers import new_uuid7
 from entitlements.application.ports import EntitlementAuditSink
 from entitlements.application.ports import EntitlementRepository
+from entitlements.application.ports import OrganizationAvailability
+from entitlements.domain.exceptions import EntitlementNotFoundError
 from entitlements.domain.exceptions import InvalidEntitlementError
 from entitlements.domain.models import BASE_FEATURES
 from entitlements.domain.models import EntitlementOverride
@@ -23,6 +25,12 @@ from entitlements.domain.models import UsageLimit
 
 MANAGE_ENTITLEMENTS_PERMISSION = "entitlements.platform.manage"
 READ_ENTITLEMENTS_PERMISSION = "entitlements.read"
+_ASSIGNABLE_SUBSCRIPTION_STATUSES = frozenset(
+    {
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.TRIALING,
+    }
+)
 
 
 class EntitlementService:
@@ -32,9 +40,11 @@ class EntitlementService:
         self,
         *,
         repository: EntitlementRepository,
+        organizations: OrganizationAvailability,
         audit: EntitlementAuditSink,
     ) -> None:
         self._repository = repository
+        self._organizations = organizations
         self._audit = audit
 
     async def create_feature(
@@ -52,6 +62,13 @@ class EntitlementService:
             code=code,
             display_name=display_name,
             base_included=code in BASE_FEATURES,
+        )
+        await self._audit_change(
+            action="feature.creation_requested",
+            actor=actor,
+            target_id=feature.id,
+            organization_id=None,
+            outcome="intent_recorded",
         )
         await self._repository.add_feature(feature)
         await self._audit_change(
@@ -91,6 +108,13 @@ class EntitlementService:
             display_name=display_name,
             grants=grants,
         )
+        await self._audit_change(
+            action="plan.creation_requested",
+            actor=actor,
+            target_id=plan.id,
+            organization_id=None,
+            outcome="intent_recorded",
+        )
         await self._repository.add_plan(plan)
         await self._audit_change(
             action="plan.created",
@@ -125,6 +149,16 @@ class EntitlementService:
         """Assign one organization's current plan through platform authority."""
 
         self._require_platform_permission(actor)
+        if status not in _ASSIGNABLE_SUBSCRIPTION_STATUSES:
+            raise InvalidEntitlementError(
+                "Subscription assignment must start active or trialing"
+            )
+        await self._require_active_organization(organization_id=organization_id)
+        plan = await self._repository.get_plan(plan_id=plan_id)
+        if plan is None:
+            raise EntitlementNotFoundError("Plan was not found")
+        if not plan.active:
+            raise InvalidEntitlementError("Inactive plans cannot be assigned")
         subscription = Subscription(
             id=new_uuid7(),
             organization_id=organization_id,
@@ -132,6 +166,13 @@ class EntitlementService:
             status=status,
             starts_at=starts_at,
             ends_at=ends_at,
+        )
+        await self._audit_change(
+            action="subscription.assignment_requested",
+            actor=actor,
+            target_id=subscription.id,
+            organization_id=organization_id,
+            outcome="intent_recorded",
         )
         await self._repository.assign_subscription(subscription)
         await self._audit_change(
@@ -157,6 +198,7 @@ class EntitlementService:
         self._require_platform_permission(actor)
         if feature in BASE_FEATURES and not enabled:
             raise InvalidEntitlementError("Base product features cannot be disabled")
+        await self._require_active_organization(organization_id=organization_id)
         override = EntitlementOverride(
             id=new_uuid7(),
             organization_id=organization_id,
@@ -164,6 +206,13 @@ class EntitlementService:
             enabled=enabled,
             usage_limit=usage_limit,
             expires_at=expires_at,
+        )
+        await self._audit_change(
+            action="entitlement.override_set_requested",
+            actor=actor,
+            target_id=override.id,
+            organization_id=organization_id,
+            outcome="intent_recorded",
         )
         await self._repository.set_override(override)
         await self._audit_change(
@@ -251,6 +300,7 @@ class EntitlementService:
         actor: PlatformActorContext,
         target_id: UUID,
         organization_id: UUID | None,
+        outcome: str = "succeeded",
     ) -> None:
         """Record one entitlement change without commercial payload details."""
 
@@ -260,8 +310,20 @@ class EntitlementService:
             actor_subject_id=actor.subject_id,
             target_id=target_id,
             correlation_id=actor.correlation_id,
-            outcome="succeeded",
+            outcome=outcome,
         )
+
+    async def _require_active_organization(
+        self,
+        *,
+        organization_id: UUID,
+    ) -> None:
+        """Reject references that do not resolve to an active organization."""
+
+        if not await self._organizations.is_active(
+            organization_id=organization_id,
+        ):
+            raise InvalidEntitlementError("Organization is not active")
 
     @staticmethod
     def _require_platform_permission(actor: PlatformActorContext) -> None:

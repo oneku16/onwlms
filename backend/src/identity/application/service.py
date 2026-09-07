@@ -19,6 +19,7 @@ from identity.domain.exceptions import InvalidAuthorizationFlowError
 from identity.domain.exceptions import InvalidCSRFTokenError
 from identity.domain.exceptions import InvalidSessionError
 from identity.domain.exceptions import OwnIDProviderError
+from identity.domain.exceptions import SessionRefreshConflictError
 from identity.domain.models import AuthorizationStart
 from identity.domain.models import CurrentSession
 from identity.domain.models import EstablishedSession
@@ -149,43 +150,93 @@ class AuthenticationService:
         self,
         *,
         session_token: str,
+        correlation_id: str,
     ) -> CurrentSession:
-        """Return an active session without exposing provider or CSRF tokens."""
+        """Return a locally and provider-active session without exposing tokens."""
 
-        stored = await self._require_session(session_token=session_token)
-        subject = await self._subjects.get(subject_id=stored.subject_id)
-        if subject is None:
-            raise InvalidSessionError
-        return CurrentSession(
-            subject=subject,
-            is_platform_admin=await self._subjects.is_platform_admin(
-                subject_id=subject.id,
-            ),
-            expires_at=stored.expires_at,
-        )
+        # A provider check happens outside the database transaction. If a
+        # concurrent refresh rotates the token family while that check is in
+        # flight, a version-conditional delete must not remove the fresh session.
+        for _ in range(2):
+            stored = await self._require_session(session_token=session_token)
+            subject = await self._subjects.get(subject_id=stored.subject_id)
+            if subject is None:
+                await self._sessions.delete_session(key_digest=stored.key_digest)
+                raise InvalidSessionError
+            if await self._provider.is_session_active(
+                tokens=stored.tokens,
+                expected_subject=subject.subject,
+            ):
+                return CurrentSession(
+                    subject=subject,
+                    is_platform_admin=await self._subjects.is_platform_admin(
+                        subject_id=subject.id,
+                    ),
+                    expires_at=stored.expires_at,
+                )
+            deleted = await self._sessions.delete_session_if_version(
+                key_digest=stored.key_digest,
+                expected_version=stored.version,
+            )
+            if deleted is not None:
+                await self._audit.record_identity_event(
+                    action="identity.session_invalidated",
+                    subject_id=subject.id,
+                    correlation_id=correlation_id,
+                    outcome="provider_inactive",
+                )
+                raise InvalidSessionError
+        # Repeated concurrent rotation is denied without deleting whichever
+        # version won the race.
+        raise InvalidSessionError
 
     async def refresh_session(
         self,
         *,
         session_token: str,
         csrf_token: str,
+        correlation_id: str,
     ) -> CurrentSession:
         """Refresh provider tokens after validating session-bound CSRF state."""
 
         stored = await self._require_session(session_token=session_token)
         self._require_csrf(stored=stored, supplied=csrf_token)
-        refresh_token = stored.tokens.refresh_token
-        if refresh_token is None:
-            raise InvalidSessionError
-        refreshed = await self._provider.refresh(refresh_token=refresh_token)
-        replaced = await self._sessions.replace_tokens(
+        provider_error: OwnIDProviderError | None = None
+        async with self._sessions.lock_for_refresh(
             key_digest=stored.key_digest,
-            expected_version=stored.version,
-            tokens=refreshed,
+        ) as claim:
+            if claim is None:
+                raise InvalidSessionError
+            locked = claim.stored
+            self._require_csrf(stored=locked, supplied=csrf_token)
+            if locked.version != stored.version:
+                raise SessionRefreshConflictError(
+                    "The session was already refreshed; retry the request."
+                )
+            refresh_token = locked.tokens.refresh_token
+            if refresh_token is None:
+                raise InvalidSessionError
+            try:
+                refreshed = await self._provider.refresh(
+                    refresh_token=refresh_token,
+                )
+            except OwnIDProviderError as exc:
+                await claim.delete()
+                provider_error = exc
+            else:
+                await claim.replace_tokens(refreshed)
+        if provider_error is not None:
+            await self._audit.record_identity_event(
+                action="identity.session_invalidated",
+                subject_id=stored.subject_id,
+                correlation_id=correlation_id,
+                outcome="provider_refresh_failed",
+            )
+            raise provider_error
+        return await self.get_current_session(
+            session_token=session_token,
+            correlation_id=correlation_id,
         )
-        if not replaced:
-            raise InvalidSessionError
-        return await self.get_current_session(session_token=session_token)
 
     async def logout(
         self,
@@ -210,13 +261,24 @@ class AuthenticationService:
                 await self._provider.revoke(refresh_token=refresh_token)
             except OwnIDProviderError:
                 provider_revoked = False
+        provider_logout_url: str | None = None
+        try:
+            provider_logout_url = await self._provider.end_session_url(
+                id_token=deleted.tokens.id_token,
+                state=secrets.token_urlsafe(32),
+            )
+        except OwnIDProviderError:
+            provider_logout_url = None
         await self._audit.record_identity_event(
             action="identity.logout",
             subject_id=stored.subject_id,
             correlation_id=correlation_id,
             outcome="succeeded",
         )
-        return LogoutResult(provider_revoked=provider_revoked)
+        return LogoutResult(
+            provider_revoked=provider_revoked,
+            provider_logout_url=provider_logout_url,
+        )
 
     async def validate_csrf(
         self,

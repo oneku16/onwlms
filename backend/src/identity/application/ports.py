@@ -1,11 +1,13 @@
 """Ports owned by identity application workflows."""
 
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 from uuid import UUID
 
 from core.context import TenantActorContext
 from identity.domain.models import OwnIDSubject
 from identity.domain.models import PendingAuthorization
+from identity.domain.models import PlatformAdministrator
 from identity.domain.models import ProviderAuthentication
 from identity.domain.models import ProviderTokens
 from identity.domain.models import StoredSession
@@ -48,6 +50,24 @@ class IdentityProvider(Protocol):
         refresh_token: str,
     ) -> None:
         """Request revocation of one provider refresh token."""
+        ...
+
+    async def is_session_active(
+        self,
+        *,
+        tokens: ProviderTokens,
+        expected_subject: str,
+    ) -> bool:
+        """Check the current OwnID token family without trusting browser claims."""
+        ...
+
+    async def end_session_url(
+        self,
+        *,
+        id_token: str,
+        state: str,
+    ) -> str | None:
+        """Build the provider browser-logout URL when discovery supports it."""
         ...
 
 
@@ -123,14 +143,12 @@ class SessionRepository(Protocol):
         """Return an active server-side session by hashed browser token."""
         ...
 
-    async def replace_tokens(
+    def lock_for_refresh(
         self,
         *,
         key_digest: str,
-        expected_version: int,
-        tokens: ProviderTokens,
-    ) -> bool:
-        """Replace tokens only when the persisted session version still matches."""
+    ) -> AbstractAsyncContextManager[SessionRefreshClaim | None]:
+        """Lock one session across a single provider refresh-token exchange."""
         ...
 
     async def delete_session(
@@ -139,6 +157,73 @@ class SessionRepository(Protocol):
         key_digest: str,
     ) -> StoredSession | None:
         """Delete a local session and return its token material for revocation."""
+        ...
+
+    async def delete_session_if_version(
+        self,
+        *,
+        key_digest: str,
+        expected_version: int,
+    ) -> StoredSession | None:
+        """Delete only the exact session version that was previously checked."""
+        ...
+
+
+class SessionRefreshClaim(Protocol):
+    """Mutate one row-locked session without opening a nested transaction."""
+
+    @property
+    def stored(self) -> StoredSession:
+        """Return the exact session state protected by the row lock."""
+        ...
+
+    async def replace_tokens(self, tokens: ProviderTokens) -> None:
+        """Persist one successful provider rotation in the held transaction."""
+        ...
+
+    async def delete(self) -> None:
+        """Delete the held session after a provider refresh failure."""
+        ...
+
+
+class PlatformAdministratorRepository(Protocol):
+    """Govern global administrator assignments behind atomic persistence rules."""
+
+    async def bootstrap(self, *, subject_id: UUID) -> PlatformAdministrator:
+        """Assign the first administrator only while none is active."""
+        ...
+
+    async def assign(self, *, subject_id: UUID) -> PlatformAdministrator:
+        """Create or reactivate one administrator assignment."""
+        ...
+
+    async def revoke(self, *, subject_id: UUID) -> PlatformAdministrator:
+        """Revoke one assignment without permitting a final-admin race."""
+        ...
+
+    async def list_all(
+        self,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[PlatformAdministrator]:
+        """List bounded administrator assignments without identity claims."""
+        ...
+
+
+class PlatformAdministrationAuditSink(Protocol):
+    """Record privacy-minimized global privilege governance evidence."""
+
+    async def record_platform_administrator_event(
+        self,
+        *,
+        action: str,
+        actor_subject_id: UUID,
+        target_subject_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Append one intent or outcome with separate actor and target identity."""
         ...
 
 
@@ -175,6 +260,9 @@ __all__ = [
     "DevelopmentIdentity",
     "IdentityAuditSink",
     "IdentityProvider",
+    "PlatformAdministrationAuditSink",
+    "PlatformAdministratorRepository",
+    "SessionRefreshClaim",
     "SessionRepository",
     "SubjectRepository",
     "TenantContextResolver",

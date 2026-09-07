@@ -17,9 +17,11 @@ subject reference, and mapping into current OwnSIS authorization.
 
 **Configuration and disclosure:** issuer, client identifier/secret, redirect URI,
 post-logout URI, scopes, and encryption key are runtime settings. The client
-secret and provider tokens never reach the browser, logs, events, audit, or API
-responses. `sub` is the stable external reference; email/name are display
-attributes only.
+secret, access token, and refresh token never reach the browser, logs, events,
+audit, or API responses. The verified ID token remains server-side during normal
+application use; the sole browser disclosure is the standard `id_token_hint`
+inside the HTTPS end-session URL returned by an explicit CSRF-protected logout.
+`sub` is the stable external reference; email/name are display attributes only.
 
 **Protocol and validation:** browser login uses Authorization Code Flow with
 PKCE, state, nonce, exact redirect allowlisting, single-use pending state, RS256
@@ -32,7 +34,14 @@ session-bound CSRF.
 missing membership, suspended organization, missing permission, refresh failure,
 or revoked/expired session fails closed. Logout clears local authority even when
 provider revocation temporarily fails and reports only the safe partial outcome.
-No fallback password or alternate production identity provider exists.
+Refresh-token exchange is serialized on the exact PostgreSQL session row so the
+same rotating token is never deliberately presented twice; queued stale
+requests fail before contacting OwnID. Inactive introspection removes only the
+session version that was checked.
+When discovery advertises an end-session endpoint, OwnSIS builds the browser
+redirect from that advertised endpoint, the ID-token hint, configured
+post-logout URI, and fresh state; the browser follows only HTTPS. No fallback
+password or alternate production identity provider exists.
 
 **Compatibility and verification:** supported OwnID discovery/token behavior is
 the contract version. Claim or endpoint changes require controlled compatibility

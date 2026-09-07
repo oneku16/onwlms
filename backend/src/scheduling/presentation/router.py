@@ -616,13 +616,13 @@ async def apply_generation(
         _proposal_session(context=context, body=session)
         for session in body.proposed_sessions
     )
-    await _timetable_service(request).apply_proposal(
+    persisted = await _timetable_service(request).apply_proposal(
         context=context,
         proposed_sessions=proposed,
         locked_session_ids=body.locked_session_ids,
         expected_versions=body.expected_versions,
     )
-    return tuple(SessionResponse.from_domain(session) for session in proposed)
+    return tuple(SessionResponse.from_domain(session) for session in persisted)
 
 
 cast(object, create_session)

@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from datetime import date
 from enum import StrEnum
 from uuid import UUID
@@ -37,6 +38,7 @@ class MembershipStatus(StrEnum):
 
     ACTIVE = "active"
     SUSPENDED = "suspended"
+    REVOKED = "revoked"
 
 
 class ProfileKind(StrEnum):
@@ -260,6 +262,29 @@ class Membership:
             correlation_id=correlation_id,
             permissions=self.permissions,
         )
+
+    def suspend(self) -> Membership:
+        """Move an active membership into its reversible suspended state."""
+
+        if self.status is not MembershipStatus.ACTIVE:
+            raise InvalidMembershipError("Only an active membership may be suspended")
+        return replace(self, status=MembershipStatus.SUSPENDED)
+
+    def reactivate(self) -> Membership:
+        """Restore a suspended membership without recovering a revoked one."""
+
+        if self.status is not MembershipStatus.SUSPENDED:
+            raise InvalidMembershipError(
+                "Only a suspended membership may be reactivated"
+            )
+        return replace(self, status=MembershipStatus.ACTIVE)
+
+    def revoke(self) -> Membership:
+        """Permanently remove an active or suspended membership."""
+
+        if self.status is MembershipStatus.REVOKED:
+            raise InvalidMembershipError("Membership is already revoked")
+        return replace(self, status=MembershipStatus.REVOKED)
 
 
 @dataclass(frozen=True, slots=True)

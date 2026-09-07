@@ -77,6 +77,7 @@ Real-provider testing requires the following additional configuration:
 | Boundary | Required controlled configuration |
 | --- | --- |
 | OwnID browser login | `OWNID_ISSUER`, `OWNID_CLIENT_ID`, `OWNID_CLIENT_SECRET`, exact redirect and post-logout URLs, compatible scopes, and an OwnID client configured for Authorization Code + PKCE. |
+| First platform administrator | `PLATFORM_ADMIN_BOOTSTRAP_SECRET` containing at least 32 characters, held in the deployment secret system only until one signed-in OwnID subject completes bootstrap. A blank value disables bootstrap. |
 | Moodle | Tenant-scoped HTTPS Moodle base URL and least-privileged web-service token, encrypted through `PUT /api/v1/integrations/moodle/configuration`; required Moodle functions and tenant mappings must exist. No supported application workflow currently creates those mappings or orchestrates production provisioning, so credentials alone enable only the implemented status and bounded mapped-user reads. Live calls also require deployment egress policy and private/link-local/loopback destination enforcement; clean HTTPS syntax alone is not complete SSRF protection. |
 | MCP | `MCP_ENABLED=true`, `MCP_AUDIENCE`, `MCP_RESOURCE_URL`, OwnID issuer/JWKS support, an access token carrying `ownsis:mcp:read`, an active membership, the correct role/resource relationship, and an enabled tenant MCP entitlement. The seeded development-base plan does not grant MCP. |
 
@@ -86,6 +87,45 @@ CORS origins, externally managed encryption/provider/database secrets, and
 least-privilege async API, synchronous migration, and async worker roles. Real
 external notification, Microsoft 365, payment, storage, DNS, and certificate
 adapters are unavailable in this release; credentials alone do not enable them.
+
+### Platform-administrator bootstrap and recovery
+
+Use bootstrap only when the database has no active platform administrator:
+
+1. generate a high-entropy value outside the repository and place it in
+   `PLATFORM_ADMIN_BOOTSTRAP_SECRET` through the deployment secret system;
+2. restart the API, sign in through OwnID, and submit the secret to
+   `POST /api/v1/platform/administrators/bootstrap` with the session-bound CSRF
+   header;
+3. verify the successful global audit intent and outcome records;
+4. clear the bootstrap secret and restart the API; and
+5. assign at least one additional trusted administrator through
+   `POST /api/v1/platform/administrators/{subject_id}/assign` before attempting
+   administrator rotation.
+
+Bootstrap closes atomically as soon as any active administrator exists. The
+ordinary revocation endpoint refuses to deactivate the final active
+administrator. Do not bypass either safeguard with direct database updates. A
+target must already be an OwnSIS identity subject established through OwnID
+sign-in; administrator assignment does not create an identity or credential.
+
+Tenant membership administrators use `GET /api/v1/memberships` under an exact
+`X-Organization-ID` context, then the suspend, reactivate, or revoke endpoint for
+the selected membership. These endpoints never govern organization owners.
+Revocation takes effect when tenant authorization re-reads the persisted
+membership. It intentionally does not delete the subject's global identity
+session or revoke provider refresh families because those credentials can also
+support another tenant membership or platform responsibility.
+
+Platform administrators govern owners from `/platform/owners`. The page reads
+the PII-free
+`GET /api/v1/platform/organizations/{organization_id}/owners` projection and
+uses the corresponding `POST .../owners/{membership_id}/suspend` or
+`POST .../owners/{membership_id}/revoke` operation. Establish another active
+owner before either transition. The backend rejects non-owner, cross-tenant,
+already-terminal, and final-active-owner targets. Concurrent attempts to remove
+the last two active owners serialize on the tenant's owner rows; only one can
+succeed. Do not bypass this safeguard with direct database updates.
 
 ## Database Evolution
 
@@ -176,7 +216,7 @@ make migrate
 OWNSIS_RUN_POSTGRES_INTEGRATION=1 make test
 ```
 
-Without `OWNSIS_RUN_POSTGRES_INTEGRATION=1`, those nine tests are skipped. CI sets
+Without `OWNSIS_RUN_POSTGRES_INTEGRATION=1`, the PostgreSQL tests are skipped. CI sets
 the flag and provisions the NOBYPASSRLS roles. Report skipped tests as skipped,
 not as passed PostgreSQL evidence.
 
@@ -275,6 +315,16 @@ CI, or hosting credential compromise:
 
 Never place compromised values in an issue, chat, log, fixture, or incident
 report.
+
+OwnSIS checks the current OwnID token family through the provider introspection
+endpoint on protected session use. Provider-inactive or mismatched sessions are
+deleted locally. Provider unavailability denies the protected operation with a
+service error; it does not preserve an authorization decision as successful.
+Interactive logout always deletes the local session first. When OwnID discovery
+advertises an end-session endpoint, the API returns a provider logout URL built
+with the ID-token hint, configured post-logout redirect URI, and fresh state;
+the frontend follows only an HTTPS URL. Revocation or end-session discovery
+failure cannot restore the deleted local session.
 
 ## Troubleshooting Commands
 

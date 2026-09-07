@@ -3,6 +3,7 @@
 from grading.domain.exceptions import GradeRevisionConflictError
 from grading.domain.exceptions import GradingRuleError
 from grading.domain.models import FinalGrade
+from grading.domain.models import FinalGradeHistory
 from grading.domain.models import GpaSummary
 from grading.domain.models import GradeBand
 from grading.domain.models import GradeOutcome
@@ -18,6 +19,7 @@ from grading.domain.models import transcript_record
 
 __all__ = [
     "FinalGrade",
+    "FinalGradeHistory",
     "GpaSummary",
     "GradeBand",
     "GradeOutcome",

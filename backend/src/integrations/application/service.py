@@ -47,15 +47,24 @@ class MoodleIntegrationService:
         if not token:
             message = "Moodle token is required"
             raise ValueError(message)
+        await self._audit.record_moodle_configuration_event(
+            action="integrations.moodle.configuration_update_requested",
+            organization_id=actor.organization_id,
+            actor_subject_id=actor.subject_id,
+            correlation_id=actor.correlation_id,
+            outcome="intent_recorded",
+        )
         configuration = await self._repository.configure(
             organization_id=actor.organization_id,
             base_url=base_url.rstrip("/"),
             encrypted_token=self._cipher.encrypt(token),
         )
         await self._audit.record_moodle_configuration_event(
+            action="integrations.moodle.configuration.updated",
             organization_id=actor.organization_id,
             actor_subject_id=actor.subject_id,
             correlation_id=actor.correlation_id,
+            outcome="succeeded",
         )
         return configuration
 

@@ -22,7 +22,6 @@ const entitlementFeatures = [
   "academic",
   "moodle_integration",
   "ownid_sso",
-  "custom_roles",
   "timetable_generation",
 ] as const;
 

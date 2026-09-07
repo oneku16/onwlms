@@ -35,6 +35,7 @@ class InMemoryAdmissionsTargetDirectory:
         targets: set[tuple[UUID, UUID, UUID]] | None = None,
     ) -> None:
         self._targets = set(targets or set())
+        self._closed_targets: set[tuple[UUID, UUID, UUID]] = set()
 
     async def target_exists(
         self,
@@ -47,6 +48,18 @@ class InMemoryAdmissionsTargetDirectory:
 
         return (organization_id, program_id, intake_id) in self._targets
 
+    async def acceptance_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether the exact registered target remains open."""
+
+        target = (organization_id, program_id, intake_id)
+        return target in self._targets and target not in self._closed_targets
+
     def add(
         self,
         *,
@@ -57,6 +70,19 @@ class InMemoryAdmissionsTargetDirectory:
         """Register a tenant admissions target for deterministic tests."""
 
         self._targets.add((organization_id, program_id, intake_id))
+
+    def close(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> None:
+        """Mark one registered target closed for deterministic tests."""
+
+        target = (organization_id, program_id, intake_id)
+        if target in self._targets:
+            self._closed_targets.add(target)
 
 
 class StaticDepositVerifier:

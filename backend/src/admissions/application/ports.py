@@ -219,6 +219,24 @@ class AcceptedApplicantEnrollmentRegistrar(Protocol):
         ...
 
 
+class AdmissionsAuditSink(Protocol):
+    """Append tenant-scoped evidence for official admissions decisions."""
+
+    async def record_admissions_decision_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        application_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        """Record decision intent or outcome without applicant profile data."""
+        ...
+
+
 class AdmissionsTargetDirectory(Protocol):
     """Validate academic program and intake references through a public contract."""
 
@@ -230,6 +248,16 @@ class AdmissionsTargetDirectory(Protocol):
         intake_id: UUID,
     ) -> bool:
         """Return whether the requested admissions target exists in the tenant."""
+        ...
+
+    async def acceptance_is_open(
+        self,
+        *,
+        organization_id: UUID,
+        program_id: UUID,
+        intake_id: UUID,
+    ) -> bool:
+        """Return whether the exact academic intake may still accept a decision."""
         ...
 
 
@@ -257,6 +285,7 @@ class AdmissionsClock(Protocol):
 
 __all__ = [
     "AcceptedApplicantEnrollmentRegistrar",
+    "AdmissionsAuditSink",
     "AdmissionsClock",
     "AdmissionsRepository",
     "AdmissionsTargetDirectory",

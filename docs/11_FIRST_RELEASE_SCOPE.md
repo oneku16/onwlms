@@ -53,12 +53,47 @@ multiple role assignments, student/teacher/staff/guardian profiles, and explicit
 guardian-student links. National identifiers and contact values are sensitive,
 never diagnostic metadata, and only enter explicit safe serializers.
 
+Memberships have explicit active, suspended, and terminal revoked states.
+Tenant membership managers may list and transition only memberships in their
+verified organization, while organization-owner membership lifecycle remains a
+separate platform operation. The platform owner directory exposes membership,
+organization, and lifecycle identifiers only, without person or OwnID subject
+data. A platform administrator may suspend or terminally revoke an owner only
+when another active owner remains. PostgreSQL locks the complete exact-tenant
+owner membership set in deterministic order before revalidating this invariant,
+so two concurrent removals from the final pair serialize and only one succeeds.
+Revocation is persisted and every tenant request rechecks that membership, so
+access to the selected organization ends immediately. Lifecycle, role, and
+owner-recovery mutations re-read and validate current state while holding the
+required PostgreSQL row locks, so a stale reactivation, role change, or owner
+operation cannot undo a concurrent terminal revocation or owner protection. The
+global identity session and provider token family are preserved because they can
+also support another tenant membership or platform responsibility. Every
+protected request rechecks provider session activity and current OwnSIS
+authorization state.
+
+The first platform administrator is established only by a signed-in OwnID
+subject presenting the separately configured one-time bootstrap secret while no
+active platform administrator exists. Subsequent assignment and revocation use
+the ordinary platform permission. Serialized persistence prevents concurrent
+bootstrap and prevents revocation of the final active administrator. Critical
+membership and platform-administrator mutations record audit intent before
+state mutation and a separate successful outcome afterward.
+
 ### Entitlements
 
 Owns global plans and feature definitions, organization subscriptions, usage
 limits, and tenant entitlement resolution. It answers whether a capability is
 available; Identity/People answers whether the actor has permission. Callers use
 the centralized resolver rather than scattered premium flags.
+
+Platform subscription assignment validates an existing active organization and
+an existing active plan before persisting the tenant-owned reference. The
+assignment boundary accepts only active or trialing start states. Subscription
+suspension and cancellation transitions are not yet validated product workflows,
+so the boundary rejects those lifecycle states rather than accepting an arbitrary
+client-selected status. Tenant feature overrides likewise require an existing
+active organization.
 
 ### Academics
 
@@ -67,7 +102,17 @@ courses, offerings, cohorts, rooms, teacher assignments, academic enrollment,
 course enrollment, curricula, curriculum-course classification, prerequisites,
 credit rules, selection requests, approval records, and administrative override
 facts. Campus identifiers are consumed through the Organizations public contract
-and are not duplicated.
+and are not duplicated. Teacher assignments and student academic enrollments
+resolve People-owned profile identifiers through a narrow public contract and
+require the exact organization plus Teacher or Student profile kind. Academic
+enrollment creation is server-owned `active`; completed and withdrawn states
+remain response facts until explicit transition use cases are validated.
+
+Course-selection approval is a new current-state decision, not acceptance of the
+submission-time snapshot. The enrollment, open term, registration deadline,
+policy, curriculum, prerequisites, credit load, timetable, and offering capacity
+must all remain valid at the decision time. A request submitted before the
+deadline therefore remains pending and cannot be approved after that deadline.
 
 ### Admissions
 
@@ -75,14 +120,26 @@ Owns applicants, applications, intake/program choice, document metadata, reviews
 decisions, quotas, seat categories, seat reservations, and deposit-required
 metadata. It publishes an accepted conversion request; People and Academics own
 the resulting student profile and academic enrollment. Payment execution is a
-port and is not treated as complete without a configured provider.
+port and is not treated as complete without a configured provider. An acceptance
+decision revalidates that its Academics-owned intake term remains open; a draft
+or pending application does not preserve eligibility after term closure.
 
 ### Grading
 
 Owns grading scales and mappings, official final grades, credits attempted and
 earned, GPA contribution, transcript read models, immutable revisions, amendment
 reason, and term-closure enforcement. It alone accepts or rejects Moodle grade
-evidence as an official result.
+evidence as an official result. Initial grades and revisions after closure require
+the separate closed-term amendment permission and a non-empty explanation. The
+current domain has no independently configurable grading-deadline field; term
+closure is the enforced boundary until that policy and its ownership are
+validated. An official grade target requires an active academic enrollment and
+an enrolled or completed course enrollment. Withdrawn participation is not a
+valid grade-mutation target; completed course participation remains valid for
+legitimate finalization and revision. When a permitted actor records an initial
+grade after closure, Grading preserves the required explanation and closure flag
+as immutable initial-record evidence and returns them through the authorized
+grade-history API alongside later revisions.
 
 ### Scheduling
 
@@ -168,6 +225,9 @@ receive a verified actor context from Identity. Platform operations are distinct
 from tenant operations. Sensitive serialization, CSRF, callback replay,
 cross-tenant access, role/permission, grade-history, event duplication,
 integration failure, and MCP resource checks require automated negative tests.
+Membership lifecycle, owner protection, first/final platform-administrator
+protection, pre-mutation audit failure, and provider-driven session invalidation
+also require explicit negative tests.
 
 The target critical release journey is:
 
@@ -201,7 +261,7 @@ fake completed behavior.
 ## Governance
 
 The module map is introduced by the direct first-release authorization. The
-architecture choices in ADR-0002 through ADR-0006 remain Proposed until the
+architecture choices in ADR-0002 through ADR-0009 remain Proposed until the
 required human architecture, security, identity, database, and public-contract
 reviews accept them. Implementation may exercise these reversible choices under
 the direct brief, but a production promotion cannot treat Proposed records as

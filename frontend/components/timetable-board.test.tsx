@@ -50,34 +50,7 @@ afterEach(() => {
 });
 
 describe("TimetableBoard", () => {
-  it("creates a manual recurring session through the authoritative API", async () => {
-    document.cookie = "ownsis_csrf=csrf-value; path=/";
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          id: "session-2",
-          activity_id: "activity-2",
-          course_offering_id: "offering-2",
-          room_id: "room-2",
-          teacher_ids: ["teacher-2"],
-          group_ids: [],
-          required_group_ids: [],
-          starts_at: "2026-08-10T08:00:00Z",
-          ends_at: "2026-08-10T09:00:00Z",
-          activity_type: "seminar",
-          required_room_type: "classroom",
-          expected_attendance: 20,
-          recurrence: {
-            interval_weeks: 1,
-            until: "2026-08-31T08:00:00Z",
-          },
-          locked: false,
-          version: 0,
-        }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("omits manual creation when no authoritative activity catalog exists", () => {
     render(
       <TimetableBoard
         canEdit
@@ -88,40 +61,15 @@ describe("TimetableBoard", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Create a manual session"));
-    const values: Readonly<Record<string, string>> = {
-      "Activity ID": "activity-2",
-      "Course offering ID": "offering-2",
-      "Room ID": "room-2",
-      "Teacher profile IDs (comma-separated)": "teacher-2",
-      "Starts at (UTC)": "2026-08-10T08:00",
-      "Ends at (UTC)": "2026-08-10T09:00",
-      "Activity type": "seminar",
-      "Required room type": "classroom",
-      "Expected attendance": "20",
-      "Recurrence through (UTC, optional)": "2026-08-31T08:00",
-    };
-    for (const [label, value] of Object.entries(values)) {
-      fireEvent.change(screen.getByLabelText(label), { target: { value } });
-    }
-    fireEvent.click(screen.getByRole("button", { name: "Create session" }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(path).toBe("/api/v1/scheduling/sessions");
-    expect(options.method).toBe("POST");
-    expect(JSON.parse(String(options.body))).toMatchObject({
-      activity_id: "activity-2",
-      teacher_ids: ["teacher-2"],
-      starts_at: "2026-08-10T08:00:00Z",
-      recurrence: {
-        interval_weeks: 1,
-        until: "2026-08-31T08:00:00Z",
-      },
-    });
     expect(
-      await screen.findByText("seminar created successfully."),
+      screen.getByRole("heading", {
+        name: "Manual session creation is unavailable",
+      }),
     ).toBeVisible();
+    expect(screen.queryByLabelText("Activity ID")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Course offering ID"),
+    ).not.toBeInTheDocument();
   });
 
   it("persists an HTML5 drag-and-drop move through the scheduling API", async () => {
@@ -134,6 +82,7 @@ describe("TimetableBoard", () => {
             title: session.title,
             starts_at: "2026-08-05T11:00:00Z",
             ends_at: "2026-08-05T12:00:00Z",
+            locked: false,
             version: 5,
           },
         }),
@@ -181,6 +130,62 @@ describe("TimetableBoard", () => {
     expect(
       await screen.findByText("Discrete Mathematics moved successfully."),
     ).toBeVisible();
+    expect(within(target).getByText("Discrete Mathematics")).toBeVisible();
+  });
+
+  it("converts an organization-local move to the correct UTC instant", async () => {
+    document.cookie = "ownsis_csrf=csrf-value; path=/";
+    const bishkekSession: ScheduleSession = {
+      ...session,
+      startsAt: "2026-08-03T02:00:00Z",
+      endsAt: "2026-08-03T03:00:00Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            id: session.id,
+            title: session.title,
+            starts_at: "2026-08-05T05:00:00Z",
+            ends_at: "2026-08-05T06:00:00Z",
+            locked: false,
+            version: 5,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <TimetableBoard
+        canEdit
+        initialSessions={[bishkekSession]}
+        organizationId="org-1"
+        weekStart="2026-08-03"
+        timezone="Asia/Bishkek"
+      />,
+    );
+
+    const transfer = dataTransfer();
+    const original = screen.getByRole("gridcell", {
+      name: /Mon Aug 3 at 08:00/i,
+    });
+    const card = within(original)
+      .getByText("Discrete Mathematics")
+      .closest("article");
+    const target = screen.getByRole("gridcell", {
+      name: /Wed Aug 5 at 11:00/i,
+    });
+    fireEvent.dragStart(card as HTMLElement, { dataTransfer: transfer });
+    fireEvent.drop(target, { dataTransfer: transfer });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toMatchObject({
+      starts_at: "2026-08-05T05:00:00.000Z",
+      ends_at: "2026-08-05T06:00:00.000Z",
+      version: 4,
+    });
     expect(within(target).getByText("Discrete Mathematics")).toBeVisible();
   });
 

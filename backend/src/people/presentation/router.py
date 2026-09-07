@@ -27,6 +27,7 @@ from people.domain.models import ContactMethod
 from people.domain.models import GuardianRelationship
 from people.domain.models import Membership
 from people.domain.models import MembershipRole
+from people.domain.models import MembershipStatus
 from people.domain.models import Person
 from people.domain.models import PersonProfile
 from people.domain.models import ProfileKind
@@ -85,11 +86,40 @@ class ReplaceRolesRequest(BaseModel):
     roles: frozenset[MembershipRole] = Field(min_length=1)
 
 
+class MembershipResponse(BaseModel):
+    """Expose safe tenant membership governance state."""
+
+    id: UUID
+    organization_id: UUID
+    identity_subject_id: UUID
+    person_id: UUID | None
+    roles: list[MembershipRole]
+    status: MembershipStatus
+
+
+class MembershipDiscoveryResponse(BaseModel):
+    """Expose the active tenant authority discoverable by one subject."""
+
+    id: UUID
+    organization_id: UUID
+    roles: list[MembershipRole]
+    permissions: list[str]
+    status: MembershipStatus
+
+
 class AppointOwnerRequest(BaseModel):
     """Validate platform appointment of an organization owner."""
 
     identity_subject_id: UUID
     person_id: UUID | None = None
+
+
+class OwnerLifecycleResponse(BaseModel):
+    """Expose owner lifecycle state without tenant person or subject data."""
+
+    id: UUID
+    organization_id: UUID
+    status: MembershipStatus
 
 
 def _people(request: Request) -> PeopleService:
@@ -201,6 +231,17 @@ def serialize_membership_discovery(membership: Membership) -> dict[str, object]:
         "id": str(membership.id),
         "organization_id": str(membership.organization_id),
         "roles": sorted(role.value for role in membership.roles),
+        "permissions": sorted(membership.permissions),
+        "status": membership.status.value,
+    }
+
+
+def serialize_owner_lifecycle_safe(membership: Membership) -> dict[str, object]:
+    """Serialize only the identifiers required for platform owner governance."""
+
+    return {
+        "id": str(membership.id),
+        "organization_id": str(membership.organization_id),
         "status": membership.status.value,
     }
 
@@ -421,7 +462,11 @@ async def create_guardian_relationship(
     )
 
 
-@router.post("/memberships", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/memberships",
+    status_code=status.HTTP_201_CREATED,
+    response_model=MembershipResponse,
+)
 async def create_membership(
     payload: CreateMembershipRequest,
     request: Request,
@@ -442,7 +487,29 @@ async def create_membership(
     )
 
 
-@router.put("/memberships/{membership_id}/roles")
+@router.get("/memberships", response_model=list[MembershipResponse])
+async def list_memberships(
+    request: Request,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> JSONResponse:
+    """List safely serialized membership governance state for one tenant."""
+
+    memberships = await _memberships(request).list_memberships(
+        actor=_tenant_actor(actor),
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(
+        [serialize_membership_safe(membership) for membership in memberships]
+    )
+
+
+@router.put(
+    "/memberships/{membership_id}/roles",
+    response_model=MembershipResponse,
+)
 async def replace_membership_roles(
     membership_id: UUID,
     payload: ReplaceRolesRequest,
@@ -461,8 +528,66 @@ async def replace_membership_roles(
 
 
 @router.post(
+    "/memberships/{membership_id}/suspend",
+    response_model=MembershipResponse,
+)
+async def suspend_membership(
+    membership_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Suspend one non-owner membership in the verified tenant."""
+
+    membership = await _memberships(request).suspend(
+        actor=_tenant_actor(actor),
+        membership_id=membership_id,
+    )
+    return JSONResponse(serialize_membership_safe(membership))
+
+
+@router.post(
+    "/memberships/{membership_id}/reactivate",
+    response_model=MembershipResponse,
+)
+async def reactivate_membership(
+    membership_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Reactivate one suspended non-owner membership in the verified tenant."""
+
+    membership = await _memberships(request).reactivate(
+        actor=_tenant_actor(actor),
+        membership_id=membership_id,
+    )
+    return JSONResponse(serialize_membership_safe(membership))
+
+
+@router.post(
+    "/memberships/{membership_id}/revoke",
+    response_model=MembershipResponse,
+)
+async def revoke_membership(
+    membership_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Permanently revoke one non-owner membership in the verified tenant."""
+
+    membership = await _memberships(request).revoke(
+        actor=_tenant_actor(actor),
+        membership_id=membership_id,
+    )
+    return JSONResponse(serialize_membership_safe(membership))
+
+
+@router.post(
     "/platform/organizations/{organization_id}/owner",
     status_code=status.HTTP_201_CREATED,
+    response_model=MembershipResponse,
 )
 async def appoint_organization_owner(
     organization_id: UUID,
@@ -485,7 +610,76 @@ async def appoint_organization_owner(
     )
 
 
-@router.get("/auth/memberships")
+@router.get(
+    "/platform/organizations/{organization_id}/owners",
+    response_model=list[OwnerLifecycleResponse],
+)
+async def list_organization_owners(
+    organization_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> JSONResponse:
+    """List exact-organization owner lifecycle state without tenant PII."""
+
+    memberships = await _memberships(request).list_organization_owners(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(
+        [serialize_owner_lifecycle_safe(membership) for membership in memberships]
+    )
+
+
+@router.post(
+    "/platform/organizations/{organization_id}/owners/{membership_id}/suspend",
+    response_model=OwnerLifecycleResponse,
+)
+async def suspend_organization_owner(
+    organization_id: UUID,
+    membership_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Suspend one owner while preserving another active owner atomically."""
+
+    membership = await _memberships(request).suspend_organization_owner(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+        membership_id=membership_id,
+    )
+    return JSONResponse(serialize_owner_lifecycle_safe(membership))
+
+
+@router.post(
+    "/platform/organizations/{organization_id}/owners/{membership_id}/revoke",
+    response_model=OwnerLifecycleResponse,
+)
+async def revoke_organization_owner(
+    organization_id: UUID,
+    membership_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Terminally revoke one owner while another active owner remains."""
+
+    membership = await _memberships(request).revoke_organization_owner(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+        membership_id=membership_id,
+    )
+    return JSONResponse(serialize_owner_lifecycle_safe(membership))
+
+
+@router.get(
+    "/auth/memberships",
+    response_model=list[MembershipDiscoveryResponse],
+)
 async def list_current_memberships(
     request: Request,
     current: CurrentSessionDep,
@@ -505,6 +699,7 @@ __all__ = [
     "serialize_guardian_relationship_safe",
     "serialize_membership_discovery",
     "serialize_membership_safe",
+    "serialize_owner_lifecycle_safe",
     "serialize_person_safe",
     "serialize_profile_directory_entry",
     "serialize_profile_safe",

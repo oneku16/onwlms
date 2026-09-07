@@ -65,6 +65,28 @@ class RecordingTermClosureAuditSink:
         )
 
 
+class UnusedAcademicProfileDirectory:
+    """Fail loudly if term closure unexpectedly resolves a People profile."""
+
+    async def teacher_profile_exists(
+        self,
+        *,
+        organization_id: UUID,
+        teacher_profile_id: UUID,
+    ) -> bool:
+        del organization_id, teacher_profile_id
+        raise AssertionError("Term closure must not resolve teacher profiles.")
+
+    async def student_profile_exists(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_id: UUID,
+    ) -> bool:
+        del organization_id, student_profile_id
+        raise AssertionError("Term closure must not resolve student profiles.")
+
+
 class FailingCloseAcademicRepository(InMemoryAcademicRepository):
     """Fail the catalog transaction after closure intent is recorded."""
 
@@ -131,6 +153,7 @@ async def _fixture(
         service=AcademicAdministrationService(
             catalog=repository,
             campuses=InMemoryCampusDirectory(),
+            profiles=UnusedAcademicProfileDirectory(),
             audit=audit,
         ),
         term=term,

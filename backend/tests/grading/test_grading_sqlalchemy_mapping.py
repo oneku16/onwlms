@@ -31,6 +31,8 @@ def test_final_grade_mapping_preserves_current_official_state() -> None:
         recorded_by=uuid4(),
         recorded_at=recorded_at,
         updated_at=updated_at,
+        recorded_after_term_closure=True,
+        recording_explanation="Registrar-approved late finalization.",
     )
 
     model = SQLAlchemyGradingRepository._grade_to_model(grade)

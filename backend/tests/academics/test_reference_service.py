@@ -11,10 +11,12 @@ from uuid import uuid4
 import pytest
 
 from academics.application.contracts import AcademicGradeTarget
+from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.reference_service import AcademicReferenceService
 from academics.domain.exceptions import AcademicRuleError
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import AcademicEnrollmentStatus
+from academics.domain.models import Cohort
 from academics.domain.models import Course
 from academics.domain.models import CourseEnrollment
 from academics.domain.models import CourseEnrollmentStatus
@@ -42,11 +44,17 @@ class _ReferenceFixture:
     offering_id: UUID
     course_id: UUID
     room_id: UUID
+    cohort_id: UUID
     horizon_start: datetime
     horizon_end: datetime
 
 
-async def _reference_fixture() -> _ReferenceFixture:
+async def _reference_fixture(
+    *,
+    academic_status: AcademicEnrollmentStatus = AcademicEnrollmentStatus.ACTIVE,
+    course_status: CourseEnrollmentStatus = CourseEnrollmentStatus.ENROLLED,
+    term_closed: bool = True,
+) -> _ReferenceFixture:
     repository = InMemoryAcademicRepository()
     organization_id = uuid4()
     other_organization_id = uuid4()
@@ -57,6 +65,7 @@ async def _reference_fixture() -> _ReferenceFixture:
     student_enrollment_id = uuid4()
     course_enrollment_id = uuid4()
     room_id = uuid4()
+    cohort_id = uuid4()
     academic_year_id = uuid4()
     now = datetime(2026, 8, 5, 10, tzinfo=UTC)
     horizon_start = datetime(2026, 8, 10, 8, tzinfo=UTC)
@@ -81,7 +90,7 @@ async def _reference_fixture() -> _ReferenceFixture:
             starts_on=horizon_start.date(),
             ends_on=(horizon_start + timedelta(days=120)).date(),
             enrollment_deadline=now,
-            is_closed=True,
+            is_closed=term_closed,
         )
     )
     await repository.save_course(
@@ -105,6 +114,16 @@ async def _reference_fixture() -> _ReferenceFixture:
             capacity=30,
         )
     )
+    await repository.save_cohort(
+        Cohort(
+            id=cohort_id,
+            organization_id=organization_id,
+            program_id=program_id,
+            academic_year_id=academic_year_id,
+            code="CS-2026",
+            name="Computer Science 2026",
+        )
+    )
     await repository.save_student_enrollment(
         StudentAcademicEnrollment(
             id=student_enrollment_id,
@@ -113,7 +132,7 @@ async def _reference_fixture() -> _ReferenceFixture:
             program_id=program_id,
             academic_year_id=academic_year_id,
             cohort_id=None,
-            status=AcademicEnrollmentStatus.ACTIVE,
+            status=academic_status,
             enrolled_at=now,
         )
     )
@@ -140,7 +159,7 @@ async def _reference_fixture() -> _ReferenceFixture:
                 student_academic_enrollment_id=student_enrollment_id,
                 course_offering_id=offering_id,
                 credits=Decimal("4"),
-                status=CourseEnrollmentStatus.ENROLLED,
+                status=course_status,
                 enrolled_at=now,
                 selection_request_id=request_id,
             ),
@@ -198,6 +217,7 @@ async def _reference_fixture() -> _ReferenceFixture:
         offering_id=offering_id,
         course_id=course_id,
         room_id=room_id,
+        cohort_id=cohort_id,
         horizon_start=horizon_start,
         horizon_end=horizon_end,
     )
@@ -216,6 +236,24 @@ async def test_admissions_target_requires_program_and_term_in_same_tenant() -> N
         organization_id=fixture.other_organization_id,
         program_id=fixture.program_id,
         intake_id=fixture.term_id,
+    )
+    assert not await service.admissions_target_is_open(
+        organization_id=fixture.organization_id,
+        program_id=fixture.program_id,
+        intake_id=fixture.term_id,
+    )
+
+    open_fixture = await _reference_fixture(term_closed=False)
+    open_service = AcademicReferenceService(repository=open_fixture.repository)
+    assert await open_service.admissions_target_is_open(
+        organization_id=open_fixture.organization_id,
+        program_id=open_fixture.program_id,
+        intake_id=open_fixture.term_id,
+    )
+    assert not await open_service.admissions_target_is_open(
+        organization_id=open_fixture.other_organization_id,
+        program_id=open_fixture.program_id,
+        intake_id=open_fixture.term_id,
     )
 
 
@@ -246,6 +284,47 @@ async def test_grade_target_and_term_closure_use_official_joined_facts() -> None
             organization_id=fixture.other_organization_id,
             term_id=fixture.term_id,
         )
+
+
+@pytest.mark.parametrize(
+    ("academic_status", "course_status", "expected"),
+    (
+        (
+            AcademicEnrollmentStatus.ACTIVE,
+            CourseEnrollmentStatus.COMPLETED,
+            True,
+        ),
+        (
+            AcademicEnrollmentStatus.WITHDRAWN,
+            CourseEnrollmentStatus.ENROLLED,
+            False,
+        ),
+        (
+            AcademicEnrollmentStatus.ACTIVE,
+            CourseEnrollmentStatus.WITHDRAWN,
+            False,
+        ),
+    ),
+)
+async def test_grade_target_requires_valid_enrollment_lifecycle(
+    academic_status: AcademicEnrollmentStatus,
+    course_status: CourseEnrollmentStatus,
+    expected: bool,
+) -> None:
+    """Keep completed courses gradable, but reject withdrawn participation."""
+
+    fixture = await _reference_fixture(
+        academic_status=academic_status,
+        course_status=course_status,
+    )
+    service = AcademicReferenceService(repository=fixture.repository)
+
+    target = await service.get_grade_target(
+        organization_id=fixture.organization_id,
+        course_enrollment_id=fixture.course_enrollment_id,
+    )
+
+    assert (target is not None) is expected
 
 
 async def test_scheduling_references_are_tenant_scoped_and_horizon_bounded() -> None:
@@ -280,3 +359,35 @@ async def test_scheduling_references_are_tenant_scoped_and_horizon_bounded() -> 
             starts_at=fixture.horizon_start,
             ends_at=fixture.horizon_start + timedelta(weeks=53),
         )
+
+
+async def test_exact_scheduling_reference_ids_are_tenant_scoped() -> None:
+    fixture = await _reference_fixture()
+    service = AcademicReferenceService(repository=fixture.repository)
+    unknown_id = uuid4()
+
+    references = await service.existing_scheduling_reference_ids(
+        organization_id=fixture.organization_id,
+        room_ids=frozenset({fixture.room_id, unknown_id}),
+        course_offering_ids=frozenset({fixture.offering_id, unknown_id}),
+        cohort_ids=frozenset({fixture.cohort_id, unknown_id}),
+    )
+    foreign = await service.existing_scheduling_reference_ids(
+        organization_id=fixture.other_organization_id,
+        room_ids=frozenset({fixture.room_id}),
+        course_offering_ids=frozenset({fixture.offering_id}),
+        cohort_ids=frozenset({fixture.cohort_id}),
+    )
+
+    assert references == AcademicSchedulingReferenceIds(
+        organization_id=fixture.organization_id,
+        room_ids=frozenset({fixture.room_id}),
+        course_offering_ids=frozenset({fixture.offering_id}),
+        cohort_ids=frozenset({fixture.cohort_id}),
+    )
+    assert foreign == AcademicSchedulingReferenceIds(
+        organization_id=fixture.other_organization_id,
+        room_ids=frozenset(),
+        course_offering_ids=frozenset(),
+        cohort_ids=frozenset(),
+    )

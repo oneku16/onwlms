@@ -3,15 +3,18 @@
 import base64
 import hashlib
 import hmac
+from collections.abc import Callable
 from uuid import UUID
 
 from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
+from sqlalchemy import Select
 from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from people.domain.exceptions import InvalidMembershipError
 from people.domain.exceptions import MembershipNotFoundError
 from people.domain.exceptions import PeopleConflictError
 from people.domain.exceptions import PeopleDataProtectionError
@@ -266,7 +269,36 @@ class SQLAlchemyPeopleRepository:
     ) -> frozenset[UUID]:
         """Return tenant-matching teacher profile IDs without decrypting data."""
 
-        if not teacher_profile_ids:
+        return await self._existing_profile_ids(
+            organization_id=organization_id,
+            profile_ids=teacher_profile_ids,
+            kind=ProfileKind.TEACHER,
+        )
+
+    async def existing_student_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_ids: frozenset[UUID],
+    ) -> frozenset[UUID]:
+        """Return tenant-matching student profile IDs without decrypting data."""
+
+        return await self._existing_profile_ids(
+            organization_id=organization_id,
+            profile_ids=student_profile_ids,
+            kind=ProfileKind.STUDENT,
+        )
+
+    async def _existing_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        profile_ids: frozenset[UUID],
+        kind: ProfileKind,
+    ) -> frozenset[UUID]:
+        """Resolve requested profile IDs for one tenant and exact profile kind."""
+
+        if not profile_ids:
             return frozenset()
         async with self._database.session(
             organization_id=organization_id,
@@ -274,8 +306,8 @@ class SQLAlchemyPeopleRepository:
             identifiers = await session.scalars(
                 select(PersonProfileModel.id).where(
                     PersonProfileModel.organization_id == organization_id,
-                    PersonProfileModel.id.in_(teacher_profile_ids),
-                    PersonProfileModel.kind == ProfileKind.TEACHER.value,
+                    PersonProfileModel.id.in_(profile_ids),
+                    PersonProfileModel.kind == kind.value,
                 )
             )
             return frozenset(identifiers)
@@ -522,41 +554,82 @@ class SQLAlchemyMembershipRepository:
                 "Membership already exists or references another tenant"
             ) from exc
 
-    async def save(
+    async def mutate_existing(
         self,
-        membership: Membership,
-    ) -> None:
-        """Replace membership status and roles under tenant locking."""
+        *,
+        organization_id: UUID,
+        membership_id: UUID,
+        mutation: Callable[[Membership], Membership],
+    ) -> Membership:
+        """Apply one domain mutation while holding the tenant membership row lock."""
 
         async with self._database.session(
-            organization_id=membership.organization_id,
+            organization_id=organization_id,
         ) as session:
             model = await session.scalar(
                 select(MembershipModel)
                 .where(
-                    MembershipModel.id == membership.id,
-                    MembershipModel.organization_id == membership.organization_id,
+                    MembershipModel.id == membership_id,
+                    MembershipModel.organization_id == organization_id,
                 )
                 .with_for_update()
             )
             if model is None:
                 raise MembershipNotFoundError
-            model.person_id = membership.person_id
-            model.status = membership.status.value
-            await session.execute(
-                delete(MembershipRoleModel).where(
-                    MembershipRoleModel.membership_id == membership.id,
-                    MembershipRoleModel.organization_id == membership.organization_id,
+            current = await self._to_domain(session=session, model=model)
+            updated = mutation(current)
+            await self._persist_mutation(
+                session=session,
+                model=model,
+                current=current,
+                updated=updated,
+            )
+            return updated
+
+    async def mutate_owner(
+        self,
+        *,
+        organization_id: UUID,
+        membership_id: UUID,
+        mutation: Callable[[Membership, tuple[Membership, ...]], Membership],
+    ) -> Membership:
+        """Serialize one owner mutation against every owner row in the tenant."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            models = list(
+                await session.scalars(
+                    self._owner_membership_query(
+                        organization_id=organization_id,
+                    ).with_for_update(of=MembershipModel)
                 )
             )
-            for role in membership.roles:
-                session.add(
-                    MembershipRoleModel(
-                        membership_id=membership.id,
-                        organization_id=membership.organization_id,
-                        role=role.value,
-                    )
-                )
+            owner_memberships = tuple(
+                [
+                    await self._to_domain(session=session, model=model)
+                    for model in models
+                ]
+            )
+            target_index = next(
+                (
+                    index
+                    for index, model in enumerate(models)
+                    if model.id == membership_id
+                ),
+                None,
+            )
+            if target_index is None:
+                raise MembershipNotFoundError
+            current = owner_memberships[target_index]
+            updated = mutation(current, owner_memberships)
+            await self._persist_mutation(
+                session=session,
+                model=models[target_index],
+                current=current,
+                updated=updated,
+            )
+            return updated
 
     async def get(
         self,
@@ -621,6 +694,110 @@ class SQLAlchemyMembershipRepository:
             return [
                 await self._to_domain(session=session, model=model) for model in models
             ]
+
+    async def list_for_organization(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> list[Membership]:
+        """List all lifecycle states through exact tenant context and predicates."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            models = await session.scalars(
+                select(MembershipModel)
+                .where(MembershipModel.organization_id == organization_id)
+                .order_by(MembershipModel.created_at, MembershipModel.id)
+                .limit(limit)
+                .offset(offset)
+            )
+            return [
+                await self._to_domain(session=session, model=model) for model in models
+            ]
+
+    async def list_owners_for_organization(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> list[Membership]:
+        """List owner lifecycle state under exact tenant context and predicates."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            models = await session.scalars(
+                self._owner_membership_query(organization_id=organization_id)
+                .limit(limit)
+                .offset(offset)
+            )
+            return [
+                await self._to_domain(session=session, model=model) for model in models
+            ]
+
+    @staticmethod
+    def _owner_membership_query(
+        *,
+        organization_id: UUID,
+    ) -> Select[tuple[MembershipModel]]:
+        """Build the deterministic exact-tenant owner membership query."""
+
+        return (
+            select(MembershipModel)
+            .join(
+                MembershipRoleModel,
+                (MembershipRoleModel.membership_id == MembershipModel.id)
+                & (
+                    MembershipRoleModel.organization_id
+                    == MembershipModel.organization_id
+                ),
+            )
+            .where(
+                MembershipModel.organization_id == organization_id,
+                MembershipRoleModel.organization_id == organization_id,
+                MembershipRoleModel.role == MembershipRole.ORGANIZATION_OWNER.value,
+            )
+            .order_by(MembershipModel.id)
+        )
+
+    @staticmethod
+    async def _persist_mutation(
+        *,
+        session: AsyncSession,
+        model: MembershipModel,
+        current: Membership,
+        updated: Membership,
+    ) -> None:
+        """Persist one validated membership mutation in the owning transaction."""
+
+        if (
+            updated.id != current.id
+            or updated.organization_id != current.organization_id
+            or updated.identity_subject_id != current.identity_subject_id
+        ):
+            raise InvalidMembershipError(
+                "Membership mutation cannot change its identity or tenant"
+            )
+        model.person_id = updated.person_id
+        model.status = updated.status.value
+        await session.execute(
+            delete(MembershipRoleModel).where(
+                MembershipRoleModel.membership_id == current.id,
+                MembershipRoleModel.organization_id == current.organization_id,
+            )
+        )
+        for role in updated.roles:
+            session.add(
+                MembershipRoleModel(
+                    membership_id=updated.id,
+                    organization_id=updated.organization_id,
+                    role=role.value,
+                )
+            )
 
     @staticmethod
     async def _to_domain(

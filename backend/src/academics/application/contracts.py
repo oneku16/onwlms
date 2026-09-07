@@ -72,6 +72,16 @@ class AcademicSchedulingReferences:
 
 
 @dataclass(frozen=True, slots=True)
+class AcademicSchedulingReferenceIds:
+    """Identify requested Scheduling references owned by one tenant."""
+
+    organization_id: UUID
+    room_ids: frozenset[UUID]
+    course_offering_ids: frozenset[UUID]
+    cohort_ids: frozenset[UUID]
+
+
+@dataclass(frozen=True, slots=True)
 class AcceptedStudentAcademicEnrollmentCommand:
     """Request one exact academic enrollment for an Admissions conversion."""
 
@@ -101,6 +111,7 @@ def _require_aware(value: datetime, label: str) -> None:
 __all__ = [
     "AcademicGradeTarget",
     "AcademicInstructionWindow",
+    "AcademicSchedulingReferenceIds",
     "AcademicSchedulingReferences",
     "AcademicSchedulingRoom",
     "AcceptedStudentAcademicEnrollmentCommand",

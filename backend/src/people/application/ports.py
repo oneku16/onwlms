@@ -1,5 +1,6 @@
 """Ports owned by people and membership application capabilities."""
 
+from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
@@ -98,6 +99,15 @@ class PeopleReferenceRepository(Protocol):
         """Return matching teacher profile IDs without exposing profile data."""
         ...
 
+    async def existing_student_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_ids: frozenset[UUID],
+    ) -> frozenset[UUID]:
+        """Return matching student profile IDs without exposing profile data."""
+        ...
+
 
 class ProfileActivationWriter(Protocol):
     """Atomically persist an activating profile and its publication fact."""
@@ -148,11 +158,24 @@ class MembershipRepository(Protocol):
         """Create one membership with all roles atomically."""
         ...
 
-    async def save(
+    async def mutate_existing(
         self,
-        membership: Membership,
-    ) -> None:
-        """Replace one membership's validated role and status state."""
+        *,
+        organization_id: UUID,
+        membership_id: UUID,
+        mutation: Callable[[Membership], Membership],
+    ) -> Membership:
+        """Lock, revalidate, and mutate one existing tenant membership atomically."""
+        ...
+
+    async def mutate_owner(
+        self,
+        *,
+        organization_id: UUID,
+        membership_id: UUID,
+        mutation: Callable[[Membership, tuple[Membership, ...]], Membership],
+    ) -> Membership:
+        """Serialize one owner mutation against the tenant's complete owner set."""
         ...
 
     async def get(
@@ -179,6 +202,26 @@ class MembershipRepository(Protocol):
         identity_subject_id: UUID,
     ) -> list[Membership]:
         """List active memberships under verified-subject PostgreSQL context."""
+        ...
+
+    async def list_for_organization(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> list[Membership]:
+        """List bounded membership governance state for exactly one tenant."""
+        ...
+
+    async def list_owners_for_organization(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> list[Membership]:
+        """List bounded owner lifecycle state for one exact organization."""
         ...
 
 

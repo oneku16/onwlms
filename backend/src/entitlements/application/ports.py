@@ -48,6 +48,14 @@ class EntitlementRepository(Protocol):
         """List bounded global plans with their explicit feature grants."""
         ...
 
+    async def get_plan(
+        self,
+        *,
+        plan_id: UUID,
+    ) -> Plan | None:
+        """Return one global plan for an authorized assignment decision."""
+        ...
+
     async def assign_subscription(
         self,
         subscription: Subscription,
@@ -88,6 +96,18 @@ class EntitlementAuditSink(Protocol):
         ...
 
 
+class OrganizationAvailability(Protocol):
+    """Expose organization lifecycle without leaking organization internals."""
+
+    async def is_active(
+        self,
+        *,
+        organization_id: UUID,
+    ) -> bool:
+        """Return whether a referenced organization exists and is active."""
+        ...
+
+
 class EntitlementResolver(Protocol):
     """Expose centralized feature policy to authorized application modules."""
 
@@ -106,4 +126,5 @@ __all__ = [
     "EntitlementAuditSink",
     "EntitlementRepository",
     "EntitlementResolver",
+    "OrganizationAvailability",
 ]

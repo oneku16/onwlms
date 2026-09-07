@@ -4,6 +4,7 @@ from grading.application.ports import GradeTargetDirectory
 from grading.application.ports import GradingClock
 from grading.application.ports import GradingRepository
 from grading.application.ports import TermClosureDirectory
+from grading.application.ports import TermGradeWriteGuard
 from grading.application.service import GRADING_CLOSED_TERM_REVISE
 from grading.application.service import GRADING_FINAL_RECORD
 from grading.application.service import GRADING_FINAL_REVISE
@@ -22,4 +23,5 @@ __all__ = [
     "GradingRepository",
     "OfficialGradingService",
     "TermClosureDirectory",
+    "TermGradeWriteGuard",
 ]

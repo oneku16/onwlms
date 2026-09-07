@@ -18,6 +18,14 @@ class OwnIDSubject:
 
 
 @dataclass(frozen=True, slots=True)
+class PlatformAdministrator:
+    """Represent separately governed global platform privilege."""
+
+    subject_id: UUID
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderTokens:
     """Carry verified provider tokens only between trusted server boundaries."""
 
@@ -94,6 +102,7 @@ class LogoutResult:
     """Report local logout success and independent provider revocation status."""
 
     provider_revoked: bool
+    provider_logout_url: str | None = None
 
 
 __all__ = [
@@ -103,6 +112,7 @@ __all__ = [
     "LogoutResult",
     "OwnIDSubject",
     "PendingAuthorization",
+    "PlatformAdministrator",
     "ProviderAuthentication",
     "ProviderTokens",
     "StoredSession",

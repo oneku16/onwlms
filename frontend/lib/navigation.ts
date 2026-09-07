@@ -76,6 +76,14 @@ export const navigationSections: readonly NavigationSection[] = [
         },
       },
       {
+        label: "Platform administrators",
+        href: "/platform/administrators",
+        access: {
+          roles: ["PlatformAdmin"],
+          permissions: ["platform_administrators.manage"],
+        },
+      },
+      {
         label: "Integration status",
         href: "/platform/integrations",
         access: {
@@ -96,7 +104,7 @@ export const navigationSections: readonly NavigationSection[] = [
           "/organization/departments",
           "academics.structure.manage",
         ],
-        ["Programs", "/organization/programs", "academics.curriculum.manage"],
+        ["Programs", "/organization/programs", "academics.structure.manage"],
         [
           "Academic calendar",
           "/organization/calendar",
@@ -108,14 +116,24 @@ export const navigationSections: readonly NavigationSection[] = [
           "/organization/grading-scales",
           "grading.scale.manage",
         ],
-        ["Courses", "/organization/courses", "academics.curriculum.manage"],
+        [
+          "Grade amendments",
+          "/organization/grade-amendments",
+          "grading.final_grade.revise",
+        ],
+        ["Courses", "/organization/courses", "academics.structure.manage"],
         [
           "Groups and cohorts",
           "/organization/groups",
           "academics.structure.manage",
         ],
-        ["Rooms", "/organization/rooms", "scheduling.read"],
+        ["Rooms", "/organization/rooms", "academics.structure.manage"],
         ["People", "/organization/people", "people.read"],
+        [
+          "Membership administration",
+          "/organization/memberships",
+          "people.memberships.manage",
+        ],
         ["Students", "/organization/students", "people.read"],
         ["Teachers", "/organization/teachers", "people.read"],
         ["Staff", "/organization/staff", "people.read"],
@@ -153,16 +171,6 @@ export const navigationSections: readonly NavigationSection[] = [
           requiresOrganization: true,
         },
       },
-      {
-        label: "Roles and permissions",
-        href: "/organization/roles",
-        access: {
-          roles: organizationAdministrators,
-          permissions: ["people.memberships.manage"],
-          entitlements: ["custom_roles"],
-          requiresOrganization: true,
-        },
-      },
     ],
   },
   {
@@ -187,6 +195,12 @@ export const navigationSections: readonly NavigationSection[] = [
         ...(href === "/student/course-selection"
           ? { permissions: ["academics.course_selection.submit"] }
           : {}),
+        ...(href === "/student/moodle"
+          ? {
+              permissions: ["integrations.moodle_deadlines.read_own"],
+              entitlements: ["moodle_integration"],
+            }
+          : {}),
         requiresOrganization: true,
       },
     })),
@@ -199,7 +213,6 @@ export const navigationSections: readonly NavigationSection[] = [
         ["Assigned sections", "/teacher/sections"],
         ["Student lists", "/teacher/students"],
         ["Grade synchronization", "/teacher/grade-sync"],
-        ["Grade amendment", "/teacher/grade-amendment"],
         ["Moodle activities", "/teacher/moodle"],
         ["Notifications", "/teacher/notifications"],
       ] as const
@@ -208,6 +221,15 @@ export const navigationSections: readonly NavigationSection[] = [
       href,
       access: {
         roles: ["Teacher"],
+        ...(href === "/teacher/grade-sync"
+          ? { permissions: ["integrations.grade_sync.read_assigned"] }
+          : {}),
+        ...(href === "/teacher/moodle"
+          ? {
+              permissions: ["integrations.moodle_deadlines.read_own"],
+              entitlements: ["moodle_integration"],
+            }
+          : {}),
         requiresOrganization: true,
       },
     })),

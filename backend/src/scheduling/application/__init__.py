@@ -1,8 +1,11 @@
 """Public scheduling application contracts."""
 
 from scheduling.application.availability_service import TeacherAvailabilityService
+from scheduling.application.contracts import ExistingSchedulingReferences
 from scheduling.application.generator import DeterministicHeuristicSchedulingGenerator
+from scheduling.application.ports import SchedulingAuditSink
 from scheduling.application.ports import SchedulingGenerator
+from scheduling.application.ports import SchedulingReferenceDirectory
 from scheduling.application.ports import SchedulingRepository
 from scheduling.application.ports import SchedulingResourceDirectory
 from scheduling.application.ports import TeacherAvailabilityDirectory
@@ -20,7 +23,10 @@ __all__ = [
     "SCHEDULING_READ",
     "SCHEDULING_SESSION_MANAGE",
     "DeterministicHeuristicSchedulingGenerator",
+    "ExistingSchedulingReferences",
+    "SchedulingAuditSink",
     "SchedulingGenerator",
+    "SchedulingReferenceDirectory",
     "SchedulingRepository",
     "SchedulingResourceDirectory",
     "TeacherAvailabilityDirectory",

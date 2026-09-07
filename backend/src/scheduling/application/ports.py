@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from scheduling.application.contracts import ExistingSchedulingReferences
 from scheduling.domain.models import ConstraintContext
 from scheduling.domain.models import ScheduledSession
 from scheduling.domain.models import ScheduleGenerationRequest
@@ -50,7 +51,17 @@ class SchedulingRepository(Protocol):
         session: ScheduledSession,
         expected_version: int | None,
     ) -> None:
-        """Create or compare-and-swap one timetable session."""
+        """Create or compare-and-swap session state without changing its booking."""
+        ...
+
+    async def save_conflict_free_session(
+        self,
+        *,
+        session: ScheduledSession,
+        expected_version: int | None,
+        constraints: ConstraintContext,
+    ) -> None:
+        """Atomically reject stored booking conflicts and save one session."""
         ...
 
     async def replace_generated_schedule(
@@ -60,8 +71,9 @@ class SchedulingRepository(Protocol):
         proposed_sessions: tuple[ScheduledSession, ...],
         locked_session_ids: frozenset[UUID],
         expected_versions: dict[UUID, int],
-    ) -> None:
-        """Atomically preserve locks and replace all other tenant sessions."""
+        constraints: ConstraintContext,
+    ) -> tuple[ScheduledSession, ...]:
+        """Atomically replace and return sessions with authoritative versions."""
         ...
 
 
@@ -88,6 +100,39 @@ class SchedulingResourceDirectory(Protocol):
         teacher_ids: frozenset[UUID],
     ) -> ConstraintContext:
         """Return tenant constraint facts covering a requested schedule horizon."""
+        ...
+
+
+class SchedulingReferenceDirectory(Protocol):
+    """Validate external scheduling identifiers through public module contracts."""
+
+    async def existing_references(
+        self,
+        *,
+        organization_id: UUID,
+        room_ids: frozenset[UUID],
+        course_offering_ids: frozenset[UUID],
+        group_ids: frozenset[UUID],
+        teacher_ids: frozenset[UUID],
+    ) -> ExistingSchedulingReferences:
+        """Return only requested references owned by the exact tenant."""
+        ...
+
+
+class SchedulingAuditSink(Protocol):
+    """Append privacy-minimized scheduling mutation evidence."""
+
+    async def record_scheduling_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        target_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record one mutation intent or completed mutation outcome."""
         ...
 
 
@@ -173,7 +218,9 @@ class TeacherReferenceDirectory(Protocol):
 
 
 __all__ = [
+    "SchedulingAuditSink",
     "SchedulingGenerator",
+    "SchedulingReferenceDirectory",
     "SchedulingRepository",
     "SchedulingResourceDirectory",
     "TeacherAvailabilityDirectory",

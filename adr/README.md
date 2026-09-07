@@ -67,6 +67,8 @@ Among ADR statuses, only Accepted records are authoritative and constrain implem
 | [ADR-0005](ADR-0005-openapi-frontend-contracts.md) | Proposed | Generate frontend API types from versioned OpenAPI |
 | [ADR-0006](ADR-0006-deterministic-scheduling-heuristic.md) | Proposed | Use a deterministic, explainable first scheduling heuristic |
 | [ADR-0007](ADR-0007-resumable-admissions-enrollment.md) | Proposed | Convert accepted applicants through resumable module-owned registrations |
+| [ADR-0008](ADR-0008-postgresql-scheduling-advisory-locks.md) | Proposed | Serialize concurrent scheduling resources with transaction-scoped PostgreSQL advisory locks |
+| [ADR-0009](ADR-0009-postgresql-term-grading-serialization.md) | Proposed | Serialize Academic term closure with official grade writes |
 
 ## Assumptions
 

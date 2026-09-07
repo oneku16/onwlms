@@ -48,16 +48,19 @@ class SQLAlchemyGradingRepository:
                     if stored != scale:
                         raise ConflictError("Published grading scales are immutable.")
                     return
-                session.add(
-                    GradingScaleModel(
-                        id=scale.id,
-                        organization_id=scale.organization_id,
-                        name=scale.name,
-                        kind=scale.kind.value,
-                        minimum_score=scale.minimum_score,
-                        maximum_score=scale.maximum_score,
-                    )
+                scale_model = GradingScaleModel(
+                    id=scale.id,
+                    organization_id=scale.organization_id,
+                    name=scale.name,
+                    kind=scale.kind.value,
+                    minimum_score=scale.minimum_score,
+                    maximum_score=scale.maximum_score,
                 )
+                session.add(scale_model)
+                # The normalized bands do not use an ORM relationship, so make
+                # the aggregate parent durable in this transaction before its
+                # foreign-key children are flushed.
+                await session.flush((scale_model,))
                 for band in scale.bands:
                     session.add(
                         GradeBandModel(
@@ -193,6 +196,16 @@ class SQLAlchemyGradingRepository:
                     raise GradeRevisionConflictError(
                         "Grade revision sequence is not contiguous."
                     )
+                if (
+                    model.recorded_by != grade.recorded_by
+                    or model.recorded_at != grade.recorded_at
+                    or model.recorded_after_term_closure
+                    != grade.recorded_after_term_closure
+                    or model.recording_explanation != grade.recording_explanation
+                ):
+                    raise GradeRevisionConflictError(
+                        "Initial grade recording evidence is immutable."
+                    )
                 session.add(self._revision_to_model(revision))
                 self._apply_grade(model=model, grade=grade)
         except IntegrityError as exc:
@@ -303,7 +316,14 @@ class SQLAlchemyGradingRepository:
     def _grade_to_model(grade: FinalGrade) -> FinalGradeModel:
         """Translate one current official grade into its persistence row."""
 
-        model = FinalGradeModel(id=grade.id, organization_id=grade.organization_id)
+        model = FinalGradeModel(
+            id=grade.id,
+            organization_id=grade.organization_id,
+            recorded_by=grade.recorded_by,
+            recorded_at=grade.recorded_at,
+            recorded_after_term_closure=grade.recorded_after_term_closure,
+            recording_explanation=grade.recording_explanation,
+        )
         SQLAlchemyGradingRepository._apply_grade(model=model, grade=grade)
         return model
 
@@ -324,8 +344,6 @@ class SQLAlchemyGradingRepository:
         model.grade_points = grade.grade_points
         model.gpa_contribution = grade.gpa_contribution
         model.revision_number = grade.revision_number
-        model.recorded_by = grade.recorded_by
-        model.recorded_at = grade.recorded_at
         model.grade_updated_at = grade.updated_at
 
     @staticmethod
@@ -351,6 +369,8 @@ class SQLAlchemyGradingRepository:
             recorded_by=model.recorded_by,
             recorded_at=model.recorded_at,
             updated_at=model.grade_updated_at,
+            recorded_after_term_closure=model.recorded_after_term_closure,
+            recording_explanation=model.recording_explanation,
         )
 
     @staticmethod

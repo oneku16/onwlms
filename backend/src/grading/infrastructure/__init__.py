@@ -7,7 +7,9 @@ from grading.infrastructure.models import GradingScaleModel
 from grading.infrastructure.repository import InMemoryGradeTargetDirectory
 from grading.infrastructure.repository import InMemoryGradingRepository
 from grading.infrastructure.repository import InMemoryTermClosureDirectory
+from grading.infrastructure.repository import InMemoryTermGradeWriteGuard
 from grading.infrastructure.sqlalchemy_repository import SQLAlchemyGradingRepository
+from grading.infrastructure.term_guard import SQLAlchemyTermGradeWriteGuard
 
 __all__ = [
     "FinalGradeModel",
@@ -17,5 +19,7 @@ __all__ = [
     "InMemoryGradeTargetDirectory",
     "InMemoryGradingRepository",
     "InMemoryTermClosureDirectory",
+    "InMemoryTermGradeWriteGuard",
     "SQLAlchemyGradingRepository",
+    "SQLAlchemyTermGradeWriteGuard",
 ]

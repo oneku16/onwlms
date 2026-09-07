@@ -12,6 +12,9 @@ from core.context import ActorContext
 from core.context import PlatformActorContext
 from core.errors import AuthenticationError
 from core.settings import Settings
+from identity.application.platform_administration import (
+    MANAGE_PLATFORM_ADMINISTRATORS_PERMISSION,
+)
 from identity.application.ports import TenantContextResolver
 from identity.application.service import AuthenticationService
 from identity.domain.models import CurrentSession
@@ -21,8 +24,10 @@ PLATFORM_ADMIN_PERMISSIONS = frozenset(
         "organizations.platform.create",
         "organizations.platform.lifecycle",
         "people.platform.appoint_owner",
+        "people.platform.manage_owner_lifecycle",
         "entitlements.platform.manage",
         "audit.platform.read",
+        MANAGE_PLATFORM_ADMINISTRATORS_PERMISSION,
     }
 )
 
@@ -86,6 +91,7 @@ async def require_current_session(request: Request) -> CurrentSession:
     settings = _settings(request)
     return await _authentication(request).get_current_session(
         session_token=request.cookies.get(settings.SESSION_COOKIE_NAME, ""),
+        correlation_id=_correlation_id(request),
     )
 
 

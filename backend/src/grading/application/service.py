@@ -13,9 +13,11 @@ from grading.application.ports import GradingAuditSink
 from grading.application.ports import GradingClock
 from grading.application.ports import GradingRepository
 from grading.application.ports import TermClosureDirectory
+from grading.application.ports import TermGradeWriteGuard
 from grading.domain.exceptions import GradeRevisionConflictError
 from grading.domain.exceptions import GradingRuleError
 from grading.domain.models import FinalGrade
+from grading.domain.models import FinalGradeHistory
 from grading.domain.models import GpaSummary
 from grading.domain.models import GradeRevision
 from grading.domain.models import GradingScale
@@ -42,12 +44,14 @@ class OfficialGradingService:
         repository: GradingRepository,
         targets: GradeTargetDirectory,
         terms: TermClosureDirectory,
+        term_writes: TermGradeWriteGuard,
         clock: GradingClock,
         audit: GradingAuditSink,
     ) -> None:
         self._repository = repository
         self._targets = targets
         self._terms = terms
+        self._term_writes = term_writes
         self._clock = clock
         self._audit = audit
 
@@ -127,6 +131,7 @@ class OfficialGradingService:
         course_enrollment_id: UUID,
         grading_scale_id: UUID,
         raw_score: Decimal,
+        explanation: str | None = None,
     ) -> FinalGrade:
         """Create the official final result for one tenant course enrollment."""
 
@@ -137,47 +142,78 @@ class OfficialGradingService:
         )
         if target is None:
             raise NotFoundError("Course enrollment was not found for grading.")
-        scale = await self._repository.get_scale(
+        async with self._term_writes.hold_grade_write(
             organization_id=context.organization_id,
-            scale_id=grading_scale_id,
-        )
-        if scale is None:
-            raise NotFoundError("Grading scale was not found.")
-        outcome = scale.resolve(raw_score)
-        now = self._clock.now()
-        grade = FinalGrade(
-            id=new_uuid7(),
-            organization_id=context.organization_id,
-            student_academic_enrollment_id=target.student_academic_enrollment_id,
-            course_enrollment_id=target.course_enrollment_id,
-            course_offering_id=target.course_offering_id,
-            course_id=target.course_id,
             term_id=target.term_id,
-            grading_scale_id=scale.id,
-            raw_score=raw_score,
-            symbol=outcome.symbol,
-            credits_attempted=target.credits,
-            credits_earned=(target.credits if outcome.passing else Decimal(0)),
-            grade_points=outcome.grade_points,
-            gpa_contribution=(
-                outcome.grade_points * target.credits
-                if outcome.grade_points is not None
+        ):
+            after_term_closure = await self._terms.is_term_closed(
+                organization_id=context.organization_id,
+                term_id=target.term_id,
+            )
+            if after_term_closure:
+                if explanation is None or not explanation.strip():
+                    raise GradingRuleError(
+                        "A post-closure final grade explanation is required."
+                    )
+                _authorize(context, GRADING_CLOSED_TERM_REVISE)
+            recording_explanation = (
+                explanation.strip()
+                if after_term_closure and explanation is not None
                 else None
-            ),
-            revision_number=0,
-            recorded_by=context.subject_id,
-            recorded_at=now,
-            updated_at=now,
-        )
-        await self._repository.create_final_grade(grade)
-        await self._audit.record_final_grade_event(
-            action="grading.final_grade.recorded",
-            organization_id=context.organization_id,
-            actor_subject_id=context.subject_id,
-            final_grade_id=grade.id,
-            correlation_id=context.correlation_id,
-            after_term_closure=False,
-        )
+            )
+            scale = await self._repository.get_scale(
+                organization_id=context.organization_id,
+                scale_id=grading_scale_id,
+            )
+            if scale is None:
+                raise NotFoundError("Grading scale was not found.")
+            outcome = scale.resolve(raw_score)
+            now = self._clock.now()
+            grade = FinalGrade(
+                id=new_uuid7(),
+                organization_id=context.organization_id,
+                student_academic_enrollment_id=target.student_academic_enrollment_id,
+                course_enrollment_id=target.course_enrollment_id,
+                course_offering_id=target.course_offering_id,
+                course_id=target.course_id,
+                term_id=target.term_id,
+                grading_scale_id=scale.id,
+                raw_score=raw_score,
+                symbol=outcome.symbol,
+                credits_attempted=target.credits,
+                credits_earned=(target.credits if outcome.passing else Decimal(0)),
+                grade_points=outcome.grade_points,
+                gpa_contribution=(
+                    outcome.grade_points * target.credits
+                    if outcome.grade_points is not None
+                    else None
+                ),
+                revision_number=0,
+                recorded_by=context.subject_id,
+                recorded_at=now,
+                updated_at=now,
+                recorded_after_term_closure=after_term_closure,
+                recording_explanation=recording_explanation,
+            )
+            await self._audit.record_final_grade_event(
+                action="grading.final_grade.record_requested",
+                organization_id=context.organization_id,
+                actor_subject_id=context.subject_id,
+                final_grade_id=grade.id,
+                correlation_id=context.correlation_id,
+                after_term_closure=after_term_closure,
+                outcome="intent_recorded",
+            )
+            await self._repository.create_final_grade(grade)
+            await self._audit.record_final_grade_event(
+                action="grading.final_grade.recorded",
+                organization_id=context.organization_id,
+                actor_subject_id=context.subject_id,
+                final_grade_id=grade.id,
+                correlation_id=context.correlation_id,
+                after_term_closure=after_term_closure,
+                outcome="succeeded",
+            )
         return grade
 
     async def revise_final_grade(
@@ -208,72 +244,130 @@ class OfficialGradingService:
             raise GradeRevisionConflictError(
                 "Final grade revision does not match the requested version."
             )
-        after_term_closure = await self._terms.is_term_closed(
+        async with self._term_writes.hold_grade_write(
             organization_id=context.organization_id,
             term_id=current.term_id,
-        )
-        if after_term_closure:
-            _authorize(context, GRADING_CLOSED_TERM_REVISE)
-        scale = await self._repository.get_scale(
-            organization_id=context.organization_id,
-            scale_id=grading_scale_id or current.grading_scale_id,
-        )
-        if scale is None:
-            raise NotFoundError("Grading scale was not found.")
-        outcome = scale.resolve(raw_score)
-        revised_at = self._clock.now()
-        next_revision_number = current.revision_number + 1
-        credits_earned = current.credits_attempted if outcome.passing else Decimal(0)
-        gpa_contribution = (
-            outcome.grade_points * current.credits_attempted
-            if outcome.grade_points is not None
-            else None
-        )
-        revised = replace(
-            current,
-            grading_scale_id=scale.id,
-            raw_score=raw_score,
-            symbol=outcome.symbol,
-            credits_earned=credits_earned,
-            grade_points=outcome.grade_points,
-            gpa_contribution=gpa_contribution,
-            revision_number=next_revision_number,
-            updated_at=revised_at,
-        )
-        revision = GradeRevision(
-            id=new_uuid7(),
-            organization_id=context.organization_id,
-            final_grade_id=current.id,
-            revision_number=next_revision_number,
-            previous_raw_score=current.raw_score,
-            previous_symbol=current.symbol,
-            previous_credits_earned=current.credits_earned,
-            previous_grade_points=current.grade_points,
-            previous_gpa_contribution=current.gpa_contribution,
-            replacement_raw_score=revised.raw_score,
-            replacement_symbol=revised.symbol,
-            replacement_credits_earned=revised.credits_earned,
-            replacement_grade_points=revised.grade_points,
-            replacement_gpa_contribution=revised.gpa_contribution,
-            explanation=explanation,
-            revised_by=context.subject_id,
-            revised_at=revised_at,
-            after_term_closure=after_term_closure,
-        )
-        await self._repository.revise_final_grade(
-            grade=revised,
-            expected_revision_number=current.revision_number,
-            revision=revision,
-        )
-        await self._audit.record_final_grade_event(
-            action="grading.final_grade.revised",
-            organization_id=context.organization_id,
-            actor_subject_id=context.subject_id,
-            final_grade_id=revised.id,
-            correlation_id=context.correlation_id,
-            after_term_closure=after_term_closure,
-        )
+        ):
+            after_term_closure = await self._terms.is_term_closed(
+                organization_id=context.organization_id,
+                term_id=current.term_id,
+            )
+            if after_term_closure:
+                _authorize(context, GRADING_CLOSED_TERM_REVISE)
+            scale = await self._repository.get_scale(
+                organization_id=context.organization_id,
+                scale_id=grading_scale_id or current.grading_scale_id,
+            )
+            if scale is None:
+                raise NotFoundError("Grading scale was not found.")
+            outcome = scale.resolve(raw_score)
+            revised_at = self._clock.now()
+            next_revision_number = current.revision_number + 1
+            credits_earned = (
+                current.credits_attempted if outcome.passing else Decimal(0)
+            )
+            gpa_contribution = (
+                outcome.grade_points * current.credits_attempted
+                if outcome.grade_points is not None
+                else None
+            )
+            revised = replace(
+                current,
+                grading_scale_id=scale.id,
+                raw_score=raw_score,
+                symbol=outcome.symbol,
+                credits_earned=credits_earned,
+                grade_points=outcome.grade_points,
+                gpa_contribution=gpa_contribution,
+                revision_number=next_revision_number,
+                updated_at=revised_at,
+            )
+            revision = GradeRevision(
+                id=new_uuid7(),
+                organization_id=context.organization_id,
+                final_grade_id=current.id,
+                revision_number=next_revision_number,
+                previous_raw_score=current.raw_score,
+                previous_symbol=current.symbol,
+                previous_credits_earned=current.credits_earned,
+                previous_grade_points=current.grade_points,
+                previous_gpa_contribution=current.gpa_contribution,
+                replacement_raw_score=revised.raw_score,
+                replacement_symbol=revised.symbol,
+                replacement_credits_earned=revised.credits_earned,
+                replacement_grade_points=revised.grade_points,
+                replacement_gpa_contribution=revised.gpa_contribution,
+                explanation=explanation,
+                revised_by=context.subject_id,
+                revised_at=revised_at,
+                after_term_closure=after_term_closure,
+            )
+            await self._audit.record_final_grade_event(
+                action="grading.final_grade.revision_requested",
+                organization_id=context.organization_id,
+                actor_subject_id=context.subject_id,
+                final_grade_id=revised.id,
+                correlation_id=context.correlation_id,
+                after_term_closure=after_term_closure,
+                outcome="intent_recorded",
+            )
+            await self._repository.revise_final_grade(
+                grade=revised,
+                expected_revision_number=current.revision_number,
+                revision=revision,
+            )
+            await self._audit.record_final_grade_event(
+                action="grading.final_grade.revised",
+                organization_id=context.organization_id,
+                actor_subject_id=context.subject_id,
+                final_grade_id=revised.id,
+                correlation_id=context.correlation_id,
+                after_term_closure=after_term_closure,
+                outcome="succeeded",
+            )
         return revised
+
+    async def revision_history(
+        self,
+        *,
+        context: TenantActorContext,
+        final_grade_id: UUID,
+    ) -> tuple[GradeRevision, ...]:
+        """Return immutable history to actors authorized to amend the grade."""
+
+        history = await self.grade_history(
+            context=context,
+            final_grade_id=final_grade_id,
+        )
+        return history.revisions
+
+    async def grade_history(
+        self,
+        *,
+        context: TenantActorContext,
+        final_grade_id: UUID,
+    ) -> FinalGradeHistory:
+        """Return initial recording evidence and immutable amendment history."""
+
+        _authorize(context, GRADING_FINAL_REVISE)
+        grade = await self._repository.get_final_grade(
+            organization_id=context.organization_id,
+            final_grade_id=final_grade_id,
+        )
+        if grade is None:
+            raise NotFoundError("Final grade was not found.")
+        revisions = await self._repository.list_grade_revisions(
+            organization_id=context.organization_id,
+            final_grade_id=grade.id,
+        )
+        return FinalGradeHistory(
+            final_grade_id=grade.id,
+            recorded_by=grade.recorded_by,
+            recorded_at=grade.recorded_at,
+            recorded_after_term_closure=grade.recorded_after_term_closure,
+            recording_explanation=grade.recording_explanation,
+            revisions=revisions,
+        )
 
     async def transcript(
         self,

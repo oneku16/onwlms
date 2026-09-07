@@ -720,7 +720,12 @@
             "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/SubscriptionStatus"
+            "enum": [
+              "trialing",
+              "active"
+            ],
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [
@@ -874,6 +879,20 @@
           "metadata"
         ],
         "title": "AuditRecordResponse",
+        "type": "object"
+      },
+      "AuthorizationStartResponse": {
+        "description": "Describe the safe browser authorization handoff.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "AuthorizationStartResponse",
         "type": "object"
       },
       "BrandingRequest": {
@@ -1418,6 +1437,101 @@
         "title": "CourseSelectionDecisionBody",
         "type": "object"
       },
+      "CourseSelectionEnrollmentOptionResponse": {
+        "description": "Serialize one actor-owned active enrollment and selectable terms.",
+        "properties": {
+          "academic_year_id": {
+            "format": "uuid",
+            "title": "Academic Year Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "program_id": {
+            "format": "uuid",
+            "title": "Program Id",
+            "type": "string"
+          },
+          "program_name": {
+            "title": "Program Name",
+            "type": "string"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/CourseSelectionTermOptionResponse"
+            },
+            "title": "Terms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "program_id",
+          "program_name",
+          "academic_year_id",
+          "terms"
+        ],
+        "title": "CourseSelectionEnrollmentOptionResponse",
+        "type": "object"
+      },
+      "CourseSelectionOfferingOptionResponse": {
+        "description": "Serialize one curriculum-backed selectable course offering.",
+        "properties": {
+          "capacity": {
+            "title": "Capacity",
+            "type": "integer"
+          },
+          "course_code": {
+            "title": "Course Code",
+            "type": "string"
+          },
+          "course_id": {
+            "format": "uuid",
+            "title": "Course Id",
+            "type": "string"
+          },
+          "course_title": {
+            "title": "Course Title",
+            "type": "string"
+          },
+          "credits": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Credits",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "meeting_windows": {
+            "items": {
+              "$ref": "#/components/schemas/MeetingWindowBody"
+            },
+            "title": "Meeting Windows",
+            "type": "array"
+          },
+          "section_code": {
+            "title": "Section Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "course_id",
+          "course_code",
+          "course_title",
+          "section_code",
+          "credits",
+          "capacity",
+          "meeting_windows"
+        ],
+        "title": "CourseSelectionOfferingOptionResponse",
+        "type": "object"
+      },
       "CourseSelectionResponse": {
         "properties": {
           "id": {
@@ -1546,6 +1660,63 @@
           "offering_ids"
         ],
         "title": "CourseSelectionSubmissionBody",
+        "type": "object"
+      },
+      "CourseSelectionTermOptionResponse": {
+        "description": "Serialize one open term and its bounded selectable offerings.",
+        "properties": {
+          "approval_required": {
+            "title": "Approval Required",
+            "type": "boolean"
+          },
+          "deadline": {
+            "format": "date-time",
+            "title": "Deadline",
+            "type": "string"
+          },
+          "ends_on": {
+            "format": "date",
+            "title": "Ends On",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "maximum_credits": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Maximum Credits",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "offerings": {
+            "items": {
+              "$ref": "#/components/schemas/CourseSelectionOfferingOptionResponse"
+            },
+            "title": "Offerings",
+            "type": "array"
+          },
+          "starts_on": {
+            "format": "date",
+            "title": "Starts On",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "starts_on",
+          "ends_on",
+          "deadline",
+          "maximum_credits",
+          "approval_required",
+          "offerings"
+        ],
+        "title": "CourseSelectionTermOptionResponse",
         "type": "object"
       },
       "CreateCampusRequest": {
@@ -1818,6 +1989,57 @@
           "kind"
         ],
         "title": "CreateProfileRequest",
+        "type": "object"
+      },
+      "CurrentSessionResponse": {
+        "description": "Expose the supported session view without provider token material.",
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_platform_admin": {
+            "title": "Is Platform Admin",
+            "type": "boolean"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "is_platform_admin",
+          "permissions",
+          "expires_at"
+        ],
+        "title": "CurrentSessionResponse",
         "type": "object"
       },
       "CurriculumBody": {
@@ -2115,6 +2337,24 @@
         "title": "DepartmentResponse",
         "type": "object"
       },
+      "DevelopmentLoginResponse": {
+        "description": "Describe the explicit local-only login result.",
+        "properties": {
+          "return_path": {
+            "title": "Return Path",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/CurrentSessionResponse"
+          }
+        },
+        "required": [
+          "user",
+          "return_path"
+        ],
+        "title": "DevelopmentLoginResponse",
+        "type": "object"
+      },
       "EducationMode-Output": {
         "description": "Describe how a program determines course participation.",
         "enum": [
@@ -2228,6 +2468,35 @@
         "title": "FeatureCode",
         "type": "string"
       },
+      "FeatureResponse": {
+        "description": "Expose one supported platform feature definition.",
+        "properties": {
+          "base_included": {
+            "title": "Base Included",
+            "type": "boolean"
+          },
+          "code": {
+            "$ref": "#/components/schemas/FeatureCode"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "display_name",
+          "base_included"
+        ],
+        "title": "FeatureResponse",
+        "type": "object"
+      },
       "FinalGradeCreateBody": {
         "description": "Validate an official final-grade creation payload.",
         "properties": {
@@ -2235,6 +2504,18 @@
             "format": "uuid",
             "title": "Course Enrollment Id",
             "type": "string"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
           },
           "grading_scale_id": {
             "format": "uuid",
@@ -2260,6 +2541,58 @@
           "raw_score"
         ],
         "title": "FinalGradeCreateBody",
+        "type": "object"
+      },
+      "FinalGradeHistoryResponse": {
+        "description": "Serialize initial recording evidence with immutable amendments.",
+        "properties": {
+          "final_grade_id": {
+            "format": "uuid",
+            "title": "Final Grade Id",
+            "type": "string"
+          },
+          "recorded_after_term_closure": {
+            "title": "Recorded After Term Closure",
+            "type": "boolean"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "recorded_by": {
+            "format": "uuid",
+            "title": "Recorded By",
+            "type": "string"
+          },
+          "recording_explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recording Explanation"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/GradeRevisionResponse"
+            },
+            "title": "Revisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "final_grade_id",
+          "recorded_by",
+          "recorded_at",
+          "recorded_after_term_closure",
+          "recording_explanation",
+          "revisions"
+        ],
+        "title": "FinalGradeHistoryResponse",
         "type": "object"
       },
       "FinalGradeResponse": {
@@ -2673,6 +3006,140 @@
         "title": "GradeBandBody",
         "type": "object"
       },
+      "GradeRevisionResponse": {
+        "description": "Serialize one immutable official-grade amendment record.",
+        "properties": {
+          "after_term_closure": {
+            "title": "After Term Closure",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "final_grade_id": {
+            "format": "uuid",
+            "title": "Final Grade Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "previous_credits_earned": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Previous Credits Earned",
+            "type": "string"
+          },
+          "previous_gpa_contribution": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Gpa Contribution"
+          },
+          "previous_grade_points": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Grade Points"
+          },
+          "previous_raw_score": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Previous Raw Score",
+            "type": "string"
+          },
+          "previous_symbol": {
+            "title": "Previous Symbol",
+            "type": "string"
+          },
+          "replacement_credits_earned": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Replacement Credits Earned",
+            "type": "string"
+          },
+          "replacement_gpa_contribution": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Gpa Contribution"
+          },
+          "replacement_grade_points": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Grade Points"
+          },
+          "replacement_raw_score": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Replacement Raw Score",
+            "type": "string"
+          },
+          "replacement_symbol": {
+            "title": "Replacement Symbol",
+            "type": "string"
+          },
+          "revised_at": {
+            "format": "date-time",
+            "title": "Revised At",
+            "type": "string"
+          },
+          "revised_by": {
+            "format": "uuid",
+            "title": "Revised By",
+            "type": "string"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "final_grade_id",
+          "revision_number",
+          "previous_raw_score",
+          "previous_symbol",
+          "previous_credits_earned",
+          "previous_grade_points",
+          "previous_gpa_contribution",
+          "replacement_raw_score",
+          "replacement_symbol",
+          "replacement_credits_earned",
+          "replacement_grade_points",
+          "replacement_gpa_contribution",
+          "explanation",
+          "revised_by",
+          "revised_at",
+          "after_term_closure"
+        ],
+        "title": "GradeRevisionResponse",
+        "type": "object"
+      },
       "GradeSummaryResponse": {
         "additionalProperties": false,
         "description": "Serialize one current official result without revision internals.",
@@ -3009,6 +3476,37 @@
         "title": "LogoMetadataRequest",
         "type": "object"
       },
+      "LogoutResponse": {
+        "description": "Report local logout and optional provider propagation safely.",
+        "properties": {
+          "logged_out": {
+            "title": "Logged Out",
+            "type": "boolean"
+          },
+          "provider_logout_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Logout Url"
+          },
+          "provider_revoked": {
+            "title": "Provider Revoked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "logged_out",
+          "provider_revoked",
+          "provider_logout_url"
+        ],
+        "title": "LogoutResponse",
+        "type": "object"
+      },
       "MeetingWindowBody": {
         "properties": {
           "ends_at": {
@@ -3036,6 +3534,99 @@
         "title": "MeetingWindowBody",
         "type": "object"
       },
+      "MembershipDiscoveryResponse": {
+        "description": "Expose the active tenant authority discoverable by one subject.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MembershipStatus"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "roles",
+          "permissions",
+          "status"
+        ],
+        "title": "MembershipDiscoveryResponse",
+        "type": "object"
+      },
+      "MembershipResponse": {
+        "description": "Expose safe tenant membership governance state.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "identity_subject_id": {
+            "format": "uuid",
+            "title": "Identity Subject Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MembershipStatus"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "identity_subject_id",
+          "person_id",
+          "roles",
+          "status"
+        ],
+        "title": "MembershipResponse",
+        "type": "object"
+      },
       "MembershipRole": {
         "description": "Built-in tenant roles that may be combined on one membership.",
         "enum": [
@@ -3048,6 +3639,16 @@
           "guest"
         ],
         "title": "MembershipRole",
+        "type": "string"
+      },
+      "MembershipStatus": {
+        "description": "Govern whether a subject may establish organization context.",
+        "enum": [
+          "active",
+          "suspended",
+          "revoked"
+        ],
+        "title": "MembershipStatus",
         "type": "string"
       },
       "MoodleConfigurationRequest": {
@@ -3277,6 +3878,31 @@
         "title": "OrganizationType",
         "type": "string"
       },
+      "OwnerLifecycleResponse": {
+        "description": "Expose owner lifecycle state without tenant person or subject data.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MembershipStatus"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "status"
+        ],
+        "title": "OwnerLifecycleResponse",
+        "type": "object"
+      },
       "PlanGrantRequest": {
         "description": "Validate one feature grant inside a plan request.",
         "properties": {
@@ -3298,6 +3924,104 @@
           "feature"
         ],
         "title": "PlanGrantRequest",
+        "type": "object"
+      },
+      "PlanGrantResponse": {
+        "description": "Expose one feature grant within a plan.",
+        "properties": {
+          "feature": {
+            "$ref": "#/components/schemas/FeatureCode"
+          },
+          "usage_limit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageLimitResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "feature",
+          "usage_limit"
+        ],
+        "title": "PlanGrantResponse",
+        "type": "object"
+      },
+      "PlanResponse": {
+        "description": "Expose one platform plan and its explicit grants.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/PlanGrantResponse"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "display_name",
+          "active",
+          "grants"
+        ],
+        "title": "PlanResponse",
+        "type": "object"
+      },
+      "PlatformAdministratorBootstrapRequest": {
+        "description": "Protect the one-time first-administrator bootstrap operation.",
+        "properties": {
+          "bootstrap_secret": {
+            "format": "password",
+            "title": "Bootstrap Secret",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "bootstrap_secret"
+        ],
+        "title": "PlatformAdministratorBootstrapRequest",
+        "type": "object"
+      },
+      "PlatformAdministratorResponse": {
+        "description": "Expose safe global privilege assignment state.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "subject_id": {
+            "format": "uuid",
+            "title": "Subject Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_id",
+          "active"
+        ],
+        "title": "PlatformAdministratorResponse",
         "type": "object"
       },
       "PreferredHoursBody": {
@@ -4299,7 +5023,31 @@
         "title": "SetOverrideRequest",
         "type": "object"
       },
+      "StudentCourseSelectionContextResponse": {
+        "description": "Serialize bounded choices discovered for the current student actor.",
+        "properties": {
+          "enrollments": {
+            "items": {
+              "$ref": "#/components/schemas/CourseSelectionEnrollmentOptionResponse"
+            },
+            "title": "Enrollments",
+            "type": "array"
+          },
+          "student_profile_id": {
+            "format": "uuid",
+            "title": "Student Profile Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "student_profile_id",
+          "enrollments"
+        ],
+        "title": "StudentCourseSelectionContextResponse",
+        "type": "object"
+      },
       "StudentEnrollmentBody": {
+        "additionalProperties": false,
         "properties": {
           "academic_year_id": {
             "format": "uuid",
@@ -4328,10 +5076,6 @@
             "title": "Program Id",
             "type": "string"
           },
-          "status": {
-            "$ref": "#/components/schemas/AcademicEnrollmentStatus",
-            "default": "active"
-          },
           "student_id": {
             "format": "uuid",
             "title": "Student Id",
@@ -4348,6 +5092,7 @@
         "type": "object"
       },
       "StudentEnrollmentResponse": {
+        "additionalProperties": false,
         "properties": {
           "academic_year_id": {
             "format": "uuid",
@@ -4382,8 +5127,7 @@
             "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/AcademicEnrollmentStatus",
-            "default": "active"
+            "$ref": "#/components/schemas/AcademicEnrollmentStatus"
           },
           "student_id": {
             "format": "uuid",
@@ -4396,21 +5140,11 @@
           "program_id",
           "academic_year_id",
           "enrolled_at",
-          "id"
+          "id",
+          "status"
         ],
         "title": "StudentEnrollmentResponse",
         "type": "object"
-      },
-      "SubscriptionStatus": {
-        "description": "Govern whether plan grants participate in feature resolution.",
-        "enum": [
-          "trialing",
-          "active",
-          "suspended",
-          "canceled"
-        ],
-        "title": "SubscriptionStatus",
-        "type": "string"
       },
       "TeacherAssignmentBody": {
         "properties": {
@@ -4764,6 +5498,24 @@
           "period"
         ],
         "title": "UsageLimitRequest",
+        "type": "object"
+      },
+      "UsageLimitResponse": {
+        "description": "Expose one bounded usage allowance.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/UsagePeriod"
+          }
+        },
+        "required": [
+          "amount",
+          "period"
+        ],
+        "title": "UsageLimitResponse",
         "type": "object"
       },
       "UsagePeriod": {
@@ -5543,6 +6295,56 @@
           }
         },
         "summary": "Create Course Offering",
+        "tags": [
+          "academics"
+        ]
+      }
+    },
+    "/api/v1/academics/course-selection-context": {
+      "get": {
+        "description": "Return real tenant-owned selection choices for the current student.",
+        "operationId": "student_course_selection_context_api_v1_academics_course_selection_context_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentCourseSelectionContextResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Student Course Selection Context",
         "tags": [
           "academics"
         ]
@@ -8729,7 +9531,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentLoginResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8769,7 +9573,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationStartResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8810,7 +9616,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8840,7 +9648,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSessionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8860,7 +9670,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MembershipDiscoveryResponse"
+                  },
+                  "title": "Response List Current Memberships Api V1 Auth Memberships Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -8891,7 +9707,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSessionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -9151,7 +9969,129 @@
         ]
       }
     },
+    "/api/v1/grading/final-grades/{final_grade_id}/history": {
+      "get": {
+        "description": "Return initial recording evidence and immutable grade amendments.",
+        "operationId": "grade_history_api_v1_grading_final_grades__final_grade_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "final_grade_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Final Grade Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalGradeHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grade History",
+        "tags": [
+          "grading"
+        ]
+      }
+    },
     "/api/v1/grading/final-grades/{final_grade_id}/revisions": {
+      "get": {
+        "description": "Return immutable history to actors authorized to amend final grades.",
+        "operationId": "revision_history_api_v1_grading_final_grades__final_grade_id__revisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "final_grade_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Final Grade Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GradeRevisionResponse"
+                  },
+                  "title": "Response Revision History Api V1 Grading Final Grades  Final Grade Id  Revisions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revision History",
+        "tags": [
+          "grading"
+        ]
+      },
       "post": {
         "description": "Amend a final grade while preserving immutable history.",
         "operationId": "revise_final_grade_api_v1_grading_final_grades__final_grade_id__revisions_post",
@@ -9814,6 +10754,81 @@
       }
     },
     "/api/v1/memberships": {
+      "get": {
+        "description": "List safely serialized membership governance state for one tenant.",
+        "operationId": "list_memberships_api_v1_memberships_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MembershipResponse"
+                  },
+                  "title": "Response List Memberships Api V1 Memberships Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Memberships",
+        "tags": [
+          "people"
+        ]
+      },
       "post": {
         "description": "Create one multi-role membership inside the verified tenant.",
         "operationId": "create_membership_api_v1_memberships_post",
@@ -9858,7 +10873,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -9875,6 +10892,144 @@
           }
         },
         "summary": "Create Membership",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/api/v1/memberships/{membership_id}/reactivate": {
+      "post": {
+        "description": "Reactivate one suspended non-owner membership in the verified tenant.",
+        "operationId": "reactivate_membership_api_v1_memberships__membership_id__reactivate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reactivate Membership",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/api/v1/memberships/{membership_id}/revoke": {
+      "post": {
+        "description": "Permanently revoke one non-owner membership in the verified tenant.",
+        "operationId": "revoke_membership_api_v1_memberships__membership_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Membership",
         "tags": [
           "people"
         ]
@@ -9935,7 +11090,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -9952,6 +11109,75 @@
           }
         },
         "summary": "Replace Membership Roles",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/api/v1/memberships/{membership_id}/suspend": {
+      "post": {
+        "description": "Suspend one non-owner membership in the verified tenant.",
+        "operationId": "suspend_membership_api_v1_memberships__membership_id__suspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suspend Membership",
         "tags": [
           "people"
         ]
@@ -11119,6 +12345,274 @@
         ]
       }
     },
+    "/api/v1/platform/administrators": {
+      "get": {
+        "description": "List bounded platform-administrator assignment state.",
+        "operationId": "list_platform_administrators_api_v1_platform_administrators_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlatformAdministratorResponse"
+                  },
+                  "title": "Response List Platform Administrators Api V1 Platform Administrators Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Platform Administrators",
+        "tags": [
+          "platform-administration"
+        ]
+      }
+    },
+    "/api/v1/platform/administrators/bootstrap": {
+      "post": {
+        "description": "Assign the signed-in OwnID subject as the first platform admin once.",
+        "operationId": "bootstrap_platform_administrator_api_v1_platform_administrators_bootstrap_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformAdministratorBootstrapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformAdministratorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bootstrap Platform Administrator",
+        "tags": [
+          "platform-administration"
+        ]
+      }
+    },
+    "/api/v1/platform/administrators/{subject_id}/assign": {
+      "post": {
+        "description": "Assign or reactivate one existing OwnID subject.",
+        "operationId": "assign_platform_administrator_api_v1_platform_administrators__subject_id__assign_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformAdministratorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Platform Administrator",
+        "tags": [
+          "platform-administration"
+        ]
+      }
+    },
+    "/api/v1/platform/administrators/{subject_id}/revoke": {
+      "post": {
+        "description": "Revoke one assignment while preserving a final active administrator.",
+        "operationId": "revoke_platform_administrator_api_v1_platform_administrators__subject_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformAdministratorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Platform Administrator",
+        "tags": [
+          "platform-administration"
+        ]
+      }
+    },
     "/api/v1/platform/features": {
       "get": {
         "description": "List bounded global feature metadata through platform authority.",
@@ -11168,7 +12662,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FeatureResponse"
+                  },
+                  "title": "Response List Features Api V1 Platform Features Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -11233,7 +12733,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -11523,7 +13025,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -11540,6 +13044,251 @@
           }
         },
         "summary": "Appoint Organization Owner",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/api/v1/platform/organizations/{organization_id}/owners": {
+      "get": {
+        "description": "List exact-organization owner lifecycle state without tenant PII.",
+        "operationId": "list_organization_owners_api_v1_platform_organizations__organization_id__owners_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OwnerLifecycleResponse"
+                  },
+                  "title": "Response List Organization Owners Api V1 Platform Organizations  Organization Id  Owners Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Organization Owners",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/api/v1/platform/organizations/{organization_id}/owners/{membership_id}/revoke": {
+      "post": {
+        "description": "Terminally revoke one owner while another active owner remains.",
+        "operationId": "revoke_organization_owner_api_v1_platform_organizations__organization_id__owners__membership_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerLifecycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Organization Owner",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/api/v1/platform/organizations/{organization_id}/owners/{membership_id}/suspend": {
+      "post": {
+        "description": "Suspend one owner while preserving another active owner atomically.",
+        "operationId": "suspend_organization_owner_api_v1_platform_organizations__organization_id__owners__membership_id__suspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "membership_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Membership Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerLifecycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suspend Organization Owner",
         "tags": [
           "people"
         ]
@@ -11805,7 +13554,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanResponse"
+                  },
+                  "title": "Response List Plans Api V1 Platform Plans Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -11870,7 +13625,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PlanResponse"
+                }
               }
             },
             "description": "Successful Response"

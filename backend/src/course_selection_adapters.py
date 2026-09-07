@@ -15,6 +15,19 @@ class CourseSelectionStudentOwnershipAdapter:
     def __init__(self, people: PeopleOwnershipReadService) -> None:
         self._people = people
 
+    async def resolve_actor_student_profile_id(
+        self,
+        *,
+        actor: TenantActorContext,
+    ) -> UUID:
+        """Return the exact student profile bound to the active membership."""
+
+        profile = await self._people.resolve_actor_profile(
+            actor=actor,
+            kind=ProfileKind.STUDENT,
+        )
+        return profile.profile_id
+
     async def actor_owns_student_profile(
         self,
         *,
@@ -24,13 +37,12 @@ class CourseSelectionStudentOwnershipAdapter:
         """Fail closed unless the active membership owns the exact profile."""
 
         try:
-            profile = await self._people.resolve_actor_profile(
+            owned_profile_id = await self.resolve_actor_student_profile_id(
                 actor=actor,
-                kind=ProfileKind.STUDENT,
             )
         except AuthorizationError, NotFoundError:
             return False
-        return profile.profile_id == student_profile_id
+        return owned_profile_id == student_profile_id
 
 
 __all__ = ["CourseSelectionStudentOwnershipAdapter"]

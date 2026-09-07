@@ -1,6 +1,8 @@
 """Functional in-memory adapters for official grading application ports."""
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from core.errors import ConflictError
@@ -69,6 +71,26 @@ class InMemoryTermClosureDirectory:
         """Mark an exact tenant term closed for deterministic tests."""
 
         self._closed_terms.add((organization_id, term_id))
+
+
+class InMemoryTermGradeWriteGuard:
+    """Serialize local grade writes for one tenant term in deterministic tests."""
+
+    def __init__(self) -> None:
+        self._locks: dict[TenantKey, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def hold_grade_write(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> AsyncIterator[None]:
+        """Hold one process-local tenant-term guard for the context lifetime."""
+
+        lock = self._locks.setdefault((organization_id, term_id), asyncio.Lock())
+        async with lock:
+            yield
 
 
 class InMemoryGradingRepository:
@@ -174,6 +196,16 @@ class InMemoryGradingRepository:
                 raise GradeRevisionConflictError(
                     "Grade revision sequence is not contiguous."
                 )
+            if (
+                grade.recorded_by != current.recorded_by
+                or grade.recorded_at != current.recorded_at
+                or grade.recorded_after_term_closure
+                != current.recorded_after_term_closure
+                or grade.recording_explanation != current.recording_explanation
+            ):
+                raise GradeRevisionConflictError(
+                    "Initial grade recording evidence is immutable."
+                )
             revision_key = (revision.organization_id, revision.id)
             if revision_key in self._revisions:
                 raise GradeRevisionConflictError("Grade revision already exists.")
@@ -222,4 +254,5 @@ __all__ = [
     "InMemoryGradeTargetDirectory",
     "InMemoryGradingRepository",
     "InMemoryTermClosureDirectory",
+    "InMemoryTermGradeWriteGuard",
 ]

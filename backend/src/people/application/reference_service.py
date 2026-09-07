@@ -24,5 +24,18 @@ class PeopleReferenceService:
             teacher_profile_ids=teacher_profile_ids,
         )
 
+    async def existing_student_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_ids: frozenset[UUID],
+    ) -> frozenset[UUID]:
+        """Return only requested IDs that are students in the exact tenant."""
+
+        return await self._repository.existing_student_profile_ids(
+            organization_id=organization_id,
+            student_profile_ids=student_profile_ids,
+        )
+
 
 __all__ = ["PeopleReferenceService"]

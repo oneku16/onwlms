@@ -27,8 +27,15 @@ class RecordingTermSession:
         self.statements: list[object] = []
         self.flush_count = 0
 
-    async def scalar(self, statement: object) -> TermModel | None:
+    async def scalar(
+        self,
+        statement: object,
+        params: object | None = None,
+    ) -> TermModel | bool | None:
+        del params
         self.statements.append(statement)
+        if "pg_try_advisory_xact_lock" in str(statement):
+            return True
         return self.term
 
     async def flush(self) -> None:
@@ -147,10 +154,17 @@ async def test_term_closure_uses_a_tenant_transaction_and_row_lock() -> None:
     assert model.is_closed is True
     assert database.organization_ids == [organization_id, organization_id]
     assert database.session_value.flush_count == 1
-    assert all(
-        "FOR UPDATE" in str(statement)
-        for statement in database.session_value.statements
+    statements = tuple(
+        str(statement) for statement in database.session_value.statements
     )
+    assert (
+        sum("pg_try_advisory_xact_lock" in statement for statement in statements) == 2
+    )
+    term_statements = tuple(
+        statement for statement in statements if "academic_terms" in statement
+    )
+    assert len(term_statements) == 2
+    assert all("FOR UPDATE" in statement for statement in term_statements)
 
 
 async def test_selection_request_page_query_is_tenant_filtered_and_stable() -> None:

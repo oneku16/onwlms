@@ -1,7 +1,12 @@
 """Minimum academic projections for ownership-safe self-service reads."""
 
 from dataclasses import dataclass
+from datetime import date
+from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
+
+from academics.domain.models import MeetingWindow
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,9 +48,60 @@ class AcademicRoomSummary:
     name: str
 
 
+@dataclass(frozen=True, slots=True)
+class CourseSelectionOfferingOption:
+    """Describe one curriculum offering available for student selection."""
+
+    id: UUID
+    course_id: UUID
+    course_code: str
+    course_title: str
+    section_code: str
+    credits: Decimal
+    capacity: int
+    meeting_windows: tuple[MeetingWindow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CourseSelectionTermOption:
+    """Describe one open policy-backed term and its selectable offerings."""
+
+    id: UUID
+    name: str
+    starts_on: date
+    ends_on: date
+    deadline: datetime
+    maximum_credits: Decimal
+    approval_required: bool
+    offerings: tuple[CourseSelectionOfferingOption, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CourseSelectionEnrollmentOption:
+    """Bind selectable terms to one exact actor-owned active enrollment."""
+
+    id: UUID
+    program_id: UUID
+    program_name: str
+    academic_year_id: UUID
+    terms: tuple[CourseSelectionTermOption, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StudentCourseSelectionContext:
+    """Contain all bounded selection choices for the current student actor."""
+
+    student_profile_id: UUID
+    enrollments: tuple[CourseSelectionEnrollmentOption, ...]
+
+
 __all__ = [
     "AcademicCourseSummary",
     "AcademicRoomSummary",
     "AcademicSectionSummary",
+    "CourseSelectionEnrollmentOption",
+    "CourseSelectionOfferingOption",
+    "CourseSelectionTermOption",
     "StudentAcademicSnapshot",
+    "StudentCourseSelectionContext",
 ]

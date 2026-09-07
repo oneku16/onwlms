@@ -37,6 +37,27 @@ class ApplicationAuditSink:
             source=AuditSource.WEB,
         )
 
+    async def record_platform_administrator_event(
+        self,
+        *,
+        action: str,
+        actor_subject_id: UUID,
+        target_subject_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record global privilege governance with distinct actor and target."""
+
+        await self._record(
+            organization_id=None,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type="platform_administrator",
+            entity_id=str(target_subject_id),
+            correlation_id=correlation_id,
+            outcome=outcome,
+        )
+
     async def record_organization_event(
         self,
         *,
@@ -133,8 +154,9 @@ class ApplicationAuditSink:
         final_grade_id: UUID,
         correlation_id: str,
         after_term_closure: bool,
+        outcome: str,
     ) -> None:
-        """Record a grade mutation without score, symbol, or explanation."""
+        """Record a grade-mutation intent or outcome without grade values."""
 
         await self._record(
             organization_id=organization_id,
@@ -143,7 +165,7 @@ class ApplicationAuditSink:
             entity_type="final_grade",
             entity_id=str(final_grade_id),
             correlation_id=correlation_id,
-            outcome="succeeded",
+            outcome=outcome,
             metadata={"after_term_closure": after_term_closure},
         )
 
@@ -155,8 +177,9 @@ class ApplicationAuditSink:
         actor_subject_id: UUID,
         request_id: UUID,
         correlation_id: str,
+        outcome: str,
     ) -> None:
-        """Record an administrative selection action without selection details."""
+        """Record a selection intent or outcome without selection details."""
 
         await self._record(
             organization_id=organization_id,
@@ -165,7 +188,7 @@ class ApplicationAuditSink:
             entity_type="course_selection_request",
             entity_id=str(request_id),
             correlation_id=correlation_id,
-            outcome="succeeded",
+            outcome=outcome,
         )
 
     async def record_term_closure_intent(
@@ -193,20 +216,46 @@ class ApplicationAuditSink:
     async def record_moodle_configuration_event(
         self,
         *,
+        action: str,
         organization_id: UUID,
         actor_subject_id: UUID,
         correlation_id: str,
+        outcome: str,
     ) -> None:
-        """Record configuration without endpoint or credential material."""
+        """Record configuration intent or outcome without sensitive material."""
 
         await self._record(
             organization_id=organization_id,
             actor_subject_id=actor_subject_id,
-            action="integrations.moodle.configuration.updated",
+            action=action,
             entity_type="moodle_integration",
             entity_id=str(organization_id),
             correlation_id=correlation_id,
-            outcome="succeeded",
+            outcome=outcome,
+        )
+
+    async def record_admissions_decision_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        application_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        """Record official decision evidence without applicant profile data."""
+
+        await self._record(
+            organization_id=organization_id,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type="admissions_application",
+            entity_id=str(application_id),
+            correlation_id=correlation_id,
+            outcome=outcome,
+            reason=reason,
         )
 
     async def record_provisioning_attempt(
@@ -233,6 +282,28 @@ class ApplicationAuditSink:
             outcome=outcome,
             source=(AuditSource.WORKER if worker_initiated else AuditSource.API),
             metadata={"target": target, "attempt": attempt},
+        )
+
+    async def record_scheduling_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        target_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record mutation intent or success without timetable payload details."""
+
+        await self._record(
+            organization_id=organization_id,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type="scheduling_resource",
+            entity_id=str(target_id),
+            correlation_id=correlation_id,
+            outcome=outcome,
         )
 
     async def _record(

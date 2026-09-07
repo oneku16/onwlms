@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -65,6 +66,7 @@ class Settings(BaseSettings):
     OWNID_POST_LOGOUT_REDIRECT_URI: str = "http://localhost:3000"
     OWNID_SCOPES: str = "openid profile email offline_access"
     OWNID_HTTP_TIMEOUT_SECONDS: float = Field(default=10.0, ge=1, le=60)
+    PLATFORM_ADMIN_BOOTSTRAP_SECRET: SecretStr = SecretStr("")
     MOODLE_REQUEST_TIMEOUT_SECONDS: float = Field(default=10.0, ge=1, le=60)
     MCP_ENABLED: bool = False
     MCP_AUDIENCE: str = ""
@@ -140,6 +142,37 @@ class Settings(BaseSettings):
             raise ValueError(message) from exc
         return value
 
+    @field_validator("PLATFORM_ADMIN_BOOTSTRAP_SECRET")
+    @classmethod
+    def validate_platform_admin_bootstrap_secret(cls, value: SecretStr) -> SecretStr:
+        """Require a high-entropy, whitespace-stable secret when configured."""
+
+        secret = value.get_secret_value()
+        if secret and (secret != secret.strip() or len(secret) < 32):
+            message = (
+                "PLATFORM_ADMIN_BOOTSTRAP_SECRET must contain at least 32 "
+                "characters without surrounding whitespace"
+            )
+            raise ValueError(message)
+        return value
+
+    @field_validator("OWNID_POST_LOGOUT_REDIRECT_URI")
+    @classmethod
+    def validate_post_logout_redirect_uri(cls, value: str) -> str:
+        """Require an absolute browser return URL without credentials or fragment."""
+
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            message = "OWNID_POST_LOGOUT_REDIRECT_URI must be an absolute HTTP URL"
+            raise ValueError(message)
+        return value
+
     @model_validator(mode="after")
     def require_production_security(self) -> Settings:
         """Fail closed when production identity or cookie settings are unsafe."""
@@ -169,6 +202,9 @@ class Settings(BaseSettings):
             raise ValueError(message)
         if not self.APP_BASE_URL.startswith("https://"):
             message = "APP_BASE_URL must use https in production"
+            raise ValueError(message)
+        if not self.OWNID_POST_LOGOUT_REDIRECT_URI.startswith("https://"):
+            message = "OWNID_POST_LOGOUT_REDIRECT_URI must use https in production"
             raise ValueError(message)
         if any(
             not origin.startswith("https://") for origin in self.cors_allowed_origins

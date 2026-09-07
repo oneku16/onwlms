@@ -7,6 +7,7 @@ from uuid import UUID
 from admissions.application.contracts import AcceptedApplicantEnrollmentCommand
 from admissions.application.contracts import AcceptedApplicantEnrollmentResult
 from admissions.application.ports import AcceptedApplicantEnrollmentRegistrar
+from admissions.application.ports import AdmissionsAuditSink
 from admissions.application.ports import AdmissionsClock
 from admissions.application.ports import AdmissionsRepository
 from admissions.application.ports import AdmissionsTargetDirectory
@@ -58,12 +59,14 @@ class AdmissionsService:
         registrar: AcceptedApplicantEnrollmentRegistrar,
         deposits: DepositVerifier,
         clock: AdmissionsClock,
+        audit: AdmissionsAuditSink,
     ) -> None:
         self._repository = repository
         self._targets = targets
         self._registrar = registrar
         self._deposits = deposits
         self._clock = clock
+        self._audit = audit
 
     async def configure_policy(
         self,
@@ -376,6 +379,14 @@ class AdmissionsService:
         policy = await self._require_policy(application)
         now = self._clock.now()
         if outcome is AdmissionDecisionOutcome.ACCEPTED:
+            if not await self._targets.acceptance_is_open(
+                organization_id=context.organization_id,
+                program_id=application.program_id,
+                intake_id=application.intake_id,
+            ):
+                raise AdmissionsRuleError(
+                    "Applications cannot be accepted for a closed academic intake."
+                )
             await self._require_passing_reviews(application, policy)
             quota = await self._repository.get_quota(
                 organization_id=context.organization_id,
@@ -409,6 +420,13 @@ class AdmissionsService:
                 reason=reason,
                 reservation_id=reservation.id,
             )
+            await self._record_decision_audit(
+                context=context,
+                application_id=application.id,
+                action="admissions.application.decision_requested",
+                outcome="intent_recorded",
+                reason=reason,
+            )
             await self._repository.decide_with_reservation(
                 application=accepted,
                 expected_status=application.status,
@@ -416,6 +434,13 @@ class AdmissionsService:
                 quota=quota,
                 reservation=reservation,
                 evaluated_at=now,
+            )
+            await self._record_decision_audit(
+                context=context,
+                application_id=application.id,
+                action="admissions.application.decided",
+                outcome="succeeded",
+                reason=reason,
             )
             return decision
 
@@ -438,10 +463,24 @@ class AdmissionsService:
             decided_at=now,
             reason=reason,
         )
+        await self._record_decision_audit(
+            context=context,
+            application_id=application.id,
+            action="admissions.application.decision_requested",
+            outcome="intent_recorded",
+            reason=reason,
+        )
         await self._repository.save_decision(
             application=decided_application,
             expected_status=application.status,
             decision=decision,
+        )
+        await self._record_decision_audit(
+            context=context,
+            application_id=application.id,
+            action="admissions.application.decided",
+            outcome="succeeded",
+            reason=reason,
         )
         return decision
 
@@ -573,6 +612,27 @@ class AdmissionsService:
             reservation=consumed_reservation,
         )
         return result
+
+    async def _record_decision_audit(
+        self,
+        *,
+        context: TenantActorContext,
+        application_id: UUID,
+        action: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        """Record decision evidence without applicant profile information."""
+
+        await self._audit.record_admissions_decision_event(
+            action=action,
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            application_id=application_id,
+            correlation_id=context.correlation_id,
+            outcome=outcome,
+            reason=reason,
+        )
 
     async def _require_application(
         self,

@@ -10,6 +10,7 @@ from grading.application.ports import GradingAuditSink
 from grading.application.ports import TermClosureDirectory
 from grading.application.service import OfficialGradingService
 from grading.infrastructure.sqlalchemy_repository import SQLAlchemyGradingRepository
+from grading.infrastructure.term_guard import SQLAlchemyTermGradeWriteGuard
 from grading.presentation.router import router
 from shared.database import Database
 
@@ -36,6 +37,7 @@ def create_official_grading_service(
         repository=SQLAlchemyGradingRepository(database),
         targets=targets,
         terms=terms,
+        term_writes=SQLAlchemyTermGradeWriteGuard(database),
         clock=SystemGradingClock(),
         audit=audit,
     )

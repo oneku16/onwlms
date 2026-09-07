@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import FastAPI
 
 from admissions.application.ports import AcceptedApplicantEnrollmentRegistrar
+from admissions.application.ports import AdmissionsAuditSink
 from admissions.application.ports import AdmissionsTargetDirectory
 from admissions.application.ports import DepositVerifier
 from admissions.application.service import AdmissionsService
@@ -32,6 +33,7 @@ def create_admissions_service(
     pii_encryption_key: str,
     targets: AdmissionsTargetDirectory,
     registrar: AcceptedApplicantEnrollmentRegistrar,
+    audit: AdmissionsAuditSink,
     deposits: DepositVerifier | None = None,
 ) -> AdmissionsService:
     """Construct PostgreSQL admissions persistence and explicit collaborators."""
@@ -45,6 +47,7 @@ def create_admissions_service(
         registrar=registrar,
         deposits=deposits or UnconfiguredDepositVerifier(),
         clock=SystemAdmissionsClock(),
+        audit=audit,
     )
 
 
