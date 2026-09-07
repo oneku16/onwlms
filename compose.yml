@@ -1,0 +1,109 @@
+name: ownsis
+
+services:
+  postgres:
+    image: postgres:18.1-bookworm
+    environment:
+      POSTGRES_DB: ownsis
+      POSTGRES_USER: ownsis_migration
+      POSTGRES_PASSWORD: ownsis_migration
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ownsis_migration -d ownsis"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ownsis_postgres:/var/lib/postgresql
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  migrate:
+    build:
+      context: backend
+      target: development
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ownsis:ownsis@postgres:5432/ownsis
+      DATABASE_MIGRATION_URL: postgresql+psycopg://ownsis_migration:ownsis_migration@postgres:5432/ownsis
+      WORKER_DATABASE_URL: postgresql+asyncpg://ownsis_worker:ownsis_worker@postgres:5432/ownsis
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: backend
+      target: development
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ownsis:ownsis@postgres:5432/ownsis
+      DATABASE_MIGRATION_URL: postgresql+psycopg://ownsis_migration:ownsis_migration@postgres:5432/ownsis
+      WORKER_DATABASE_URL: postgresql+asyncpg://ownsis_worker:ownsis_worker@postgres:5432/ownsis
+      APP_BASE_URL: http://localhost:3000
+      API_BASE_URL: http://localhost:8000
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+      COOKIE_SECURE: "false"
+      DEV_AUTH_ENABLED: "true"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: backend
+      target: development
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ownsis:ownsis@postgres:5432/ownsis
+      DATABASE_MIGRATION_URL: postgresql+psycopg://ownsis_migration:ownsis_migration@postgres:5432/ownsis
+      WORKER_DATABASE_URL: postgresql+asyncpg://ownsis_worker:ownsis_worker@postgres:5432/ownsis
+      COOKIE_SECURE: "false"
+      DEV_AUTH_ENABLED: "true"
+    command: ["python", "-m", "worker"]
+    volumes:
+      - ./backend/src:/app/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: frontend
+      target: development
+    environment:
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_PRODUCT_NAME: OwnSIS
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  ownsis_postgres:
+  frontend_node_modules:
+  frontend_next:

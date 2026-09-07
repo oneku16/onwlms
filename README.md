@@ -2,31 +2,178 @@
 
 ## Purpose
 
-This README is the entry point to the OwnSIS repository. It establishes the product boundary, the engineering intent, the selected technology stack, and the repository principles that all contributors must understand before proposing implementation work.
+This README is the developer entry point for the first OwnSIS implementation.
+It explains what can be exercised now, what remains incomplete, and the exact
+local setup and verification workflow. It is not a production deployment guide
+or a production-readiness claim.
 
 ## What OwnSIS Is
 
-OwnSIS is a modern, multi-tenant Education ERP platform for schools, colleges, and universities. It is a complete rewrite intended to replace OpenSIS; it is neither a fork of OpenSIS nor a migration of the OpenSIS codebase.
+OwnSIS is a multi-tenant Education ERP for schools, colleges, and universities.
+It is a greenfield replacement for OpenSIS, not a fork, database proxy, or legacy
+compatibility layer.
 
 OwnSIS is the system of record for academic and administrative data. Each organization is an isolated tenant with its own branding, domain, users, permissions, integrations, and subscriptions. Tenant isolation is a foundational architectural property rather than an optional feature.
 
-The platform has explicit responsibility boundaries:
+The platform has explicit authority boundaries:
 
 - **OwnID** is the only identity provider. OwnSIS consumes identity and authentication outcomes but does not create a competing identity system.
 - **Moodle** is responsible only for learning delivery. OwnSIS retains ownership of academic and administrative records.
-- **MCP** is the integration approach for AI capabilities. AI features must remain governed, observable, permission-aware, and replaceable.
+- **MCP** is the governed boundary for AI capabilities. Its first catalog is
+  read-only, permission-aware, tenant-bound, entitlement-controlled, and audited.
 
-## Why It Exists
+## First-Release Status
 
-OwnSIS exists to provide a maintainable institutional platform whose architecture can evolve for at least fifteen years. The repository is organized around clear domain ownership, explicit boundaries, traceable decisions, secure tenant isolation, and incremental change. Readability, correctness, and operational clarity take precedence over minimizing the number of files, abstractions, or lines of code.
+The repository contains a working local first-release implementation for
+controlled development and evaluation. Green checks show that repository
+contracts pass in the tested environment; they do not establish production
+security, availability, accessibility, provider compatibility, backup recovery,
+or institutional policy acceptance.
 
-The rewrite creates a clean engineering foundation without inheriting legacy implementation constraints, database structures, APIs, or architectural coupling from OpenSIS.
+| Classification | Current evidence and limit |
+| --- | --- |
+| Implemented | FastAPI modular monolith, PostgreSQL/Alembic persistence, explicit tenant context and RLS policies, encrypted server sessions, organization/people/entitlement/academic/admissions/grading/scheduling APIs, audit records, an outbox worker, in-app notifications, bounded self-service reads, a read-only MCP catalog, a permission-driven Next.js shell, Docker local services, and automated backend/frontend checks. |
+| Partial | Most of the critical academic journey is assembled from real use cases, but Moodle evidence cannot yet become an official grade and not every portal page is an interactive workflow. Operational replay, observability, accessibility, localization, load isolation, backup restoration, privacy lifecycle, and deployment procedures still require environment-specific evidence. The deterministic timetable generator is intentionally limited. |
+| Credential-gated | Real OwnID login, real Moodle calls, and authenticated MCP access require external configuration and controlled-provider tests. Moodle deadline reads are bounded live evidence for the mapped user's enrolled courses; the repository does not persist or serve a deadline cache. |
+| Deferred or explicitly unavailable | Authenticated Moodle grade-event ingress, selected-term reconciliation, official Moodle-to-OwnSIS grade acceptance, attendance, Finance balances and payments, HR, Library, Dormitory, advanced analytics, production notification providers, Microsoft 365 provisioning, object storage, custom-domain automation, and production-grade optimizer selection are not complete capabilities. The UI must identify unavailable work rather than fabricate results. |
 
-## Scope
+ADRs [0002 through 0007](adr/README.md) remain **Proposed**. Their implementation
+is reviewable evidence, not architecture acceptance. Only ADR-0001 is currently
+Accepted. Do not describe this repository as production-ready until the
+applicable roadmap gates and human reviews are complete.
 
-This repository contains the OwnSIS product source, architecture records, engineering standards, operational assets, and verification suites. At the current foundation stage, the documentation defines how future business capabilities will be discovered and implemented; it does not pre-empt that work by inventing business workflows, APIs, database schemas, or module internals.
+## Quick Start
 
-The platform scope includes multi-tenant academic and administrative capabilities and the controlled integration boundaries required to work with OwnID, Moodle, AI tooling, and organization-specific services. Identity implementation belongs to OwnID, and learning delivery belongs to Moodle.
+### Prerequisites
+
+- Docker Engine with Docker Compose v2;
+- `uv` and a Python 3.14 runtime;
+- Node.js 24 or newer and npm 11 or newer; and
+- network access for the initial locked dependency install, image pulls, and
+  dependency-audit commands.
+
+From the repository root:
+
+```text
+make setup
+make run
+```
+
+`make setup` installs locked backend and frontend dependencies, builds local
+images, and creates `.env` from `.env.example` only when `.env` does not already
+exist. A new file receives three independently generated Fernet keys for
+sessions, PII, and integration credentials. Existing `.env` files are never
+overwritten.
+
+`make run` starts PostgreSQL, applies Alembic migrations through the separate
+migration role, and starts the API, worker, and frontend. It stays attached to
+container logs. In another terminal, seed the synthetic local tenant and
+administrator:
+
+```text
+make seed
+```
+
+The seed is local-only and idempotent. Open:
+
+- web application: `http://localhost:3000`;
+- API documentation: `http://localhost:8000/api/docs`;
+- liveness: `http://localhost:8000/health`; and
+- database readiness: `http://localhost:8000/ready`.
+
+The example environment enables the explicit local development login. It is
+rejected by production settings. Stop without deleting data using `make stop`,
+or remove containers and networks while retaining the PostgreSQL volume using
+`make down`.
+
+## Everyday Commands
+
+Run these from the repository root:
+
+| Task | Exact command |
+| --- | --- |
+| Install locked dependencies, create a missing local environment, and build images | `make setup` |
+| Run the complete local stack | `make run` |
+| Apply committed migrations to the configured database | `make migrate` |
+| Generate a migration candidate for review | `make migration name="describe the owned schema change"` |
+| Verify migration head and model drift | `make migration-check` |
+| Seed synthetic local data | `make seed` |
+| Run backend and frontend tests | `make test` |
+| Run formatting checks, linters, and diff hygiene | `make lint` |
+| Run strict backend and frontend type checks | `make typecheck` |
+| Verify the committed OpenAPI contract | `make openapi-check` |
+| Regenerate OpenAPI and frontend API types intentionally | `make openapi` |
+| Build frontend and backend runtime images separately | `make frontend-build` and `make backend-build` |
+| Run dependency audits | `make audit` |
+| Run the aggregate local validation gate and runtime image builds | `make validate` |
+
+`make validate` does not include `make migration-check`. Run both before handing
+off a migration. Real PostgreSQL tenant-enforcement tests are opt-in locally:
+
+```text
+docker compose up -d --wait postgres
+make migrate
+OWNSIS_RUN_POSTGRES_INTEGRATION=1 make test
+```
+
+CI enables that flag. Without it, nine PostgreSQL integration tests are reported
+as skipped rather than passed.
+
+## Configuration and Credentials
+
+Local development requires no provider credential. `make setup` supplies local
+encryption keys, Docker supplies the three PostgreSQL roles, and
+`DEV_AUTH_ENABLED=true` enables the explicit development identity adapter.
+
+Controlled external testing requires:
+
+- OwnID issuer, client ID, client secret, redirect/post-logout URLs, and a client
+  configuration compatible with Authorization Code + PKCE;
+- a tenant Moodle HTTPS origin and least-privileged web-service token configured
+  through the authenticated tenant API;
+- for MCP, `MCP_ENABLED=true`, `MCP_AUDIENCE`, `MCP_RESOURCE_URL`, an OwnID access
+  token with `ownsis:mcp:read`, an active tenant membership, and an enabled MCP
+  entitlement (the seeded development-base plan does not grant MCP); and
+- separate test tenants and non-production provider accounts for negative and
+  failure-path verification.
+
+Production additionally requires externally managed secrets, HTTPS URLs,
+secure cookies, HTTPS CORS origins, separate least-privilege database roles,
+managed PostgreSQL, backup/restore, egress control, rate/concurrency limits, and
+observability. The code validates several unsafe configurations, but validation
+is not a substitute for a deployment security review. Real external
+notification, Microsoft 365, payment, object-storage, DNS, and certificate
+adapters are not made available merely by adding credentials.
+
+## Migration and Recovery Policy
+
+The committed migration chain is forward-only for data-bearing changes. The
+initial schema, admissions-conversion, and teacher-availability migrations
+intentionally refuse downgrade because destructive reversal cannot preserve
+authoritative data; the worker-audit grant migration is safely reversible. Do
+not run or document `alembic downgrade base` as a recovery procedure. Use a
+reviewed forward repair or restore a verified backup into a controlled
+environment.
+
+## Troubleshooting
+
+- If setup cannot initialize `.env`, verify that the repository directory is
+  writable. Setup preserves configured values, adds missing defaults, generates
+  blank or absent local encryption keys, and restricts the file to its owner.
+- If ports `3000`, `5432`, or `8000` are occupied, stop the conflicting service or
+  adjust both Compose and the matching URLs; changing only one side breaks
+  callbacks or database access.
+- If `/ready` returns 503, inspect `docker compose ps` and
+  `docker compose logs postgres migrate backend` before retrying migrations.
+- If `make seed` cannot connect, start PostgreSQL and apply migrations first with
+  `docker compose up -d --wait postgres`, then `make migrate`.
+- If OpenAPI checks fail after an intentional API change, run `make openapi`,
+  review both generated diffs, and rerun `make openapi-check`.
+- `make audit` and therefore `make validate` require package-registry access and
+  may fail on network or registry outages; do not report that as a clean audit.
+- To erase a disposable local database only, `docker compose down -v` removes the
+  named PostgreSQL volume irreversibly. Never use it against data that must be
+  retained.
 
 ## Responsibilities
 

@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.1-bookworm
+        env:
+          POSTGRES_DB: ownsis
+          POSTGRES_USER: ownsis_migration
+          POSTGRES_PASSWORD: ownsis_migration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ownsis_migration -d ownsis"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://ownsis:ownsis@localhost:5432/ownsis
+      DATABASE_MIGRATION_URL: postgresql+psycopg://ownsis_migration:ownsis_migration@localhost:5432/ownsis
+      WORKER_DATABASE_URL: postgresql+asyncpg://ownsis_worker:ownsis_worker@localhost:5432/ownsis
+      OWNSIS_RUN_POSTGRES_INTEGRATION: "1"
+      COOKIE_SECURE: "false"
+      DEV_AUTH_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.9.21
+          python-version: "3.14"
+          enable-cache: true
+      - name: Provision NOBYPASSRLS runtime roles
+        env:
+          PGPASSWORD: ownsis_migration
+        run: >-
+          psql --host localhost --username ownsis_migration --dbname ownsis
+          --file infrastructure/postgres/init/001_roles.sql
+      - run: uv sync --project backend --all-groups --frozen
+      - run: uv run --project backend python scripts/export_openapi.py --check
+      - run: uv run --project backend ruff check backend/src backend/tests
+      - run: uv run --project backend ruff format --check backend/src backend/tests
+      - run: uv run --project backend mypy backend/src backend/tests
+      - run: uv run --project backend alembic -c backend/alembic.ini upgrade head
+      - run: uv run --project backend alembic -c backend/alembic.ini current --check-heads
+      - run: uv run --project backend alembic -c backend/alembic.ini check
+      - run: uv run --project backend pytest backend/tests
+      - run: uv run --project backend pip-audit
+      - run: docker build --target runtime --build-arg SOURCE_REVISION="$GITHUB_SHA" backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run check:api
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      - run: docker build --target runtime .
+
+  repository:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git diff --check HEAD~1 HEAD
+      - run: docker compose config --quiet
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/openapi-contract/package-lock.json
+      - run: npm ci --prefix tools/openapi-contract
+      - run: npm audit --prefix tools/openapi-contract --audit-level=high
+      - name: Detect likely committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
