@@ -3,36 +3,99 @@
 import type { FormEvent } from "react";
 import { useState } from "react";
 
+import { FormFeedback } from "@/components/form-feedback";
 import { ResourceList } from "@/components/resource-list";
+import { ResourceOptions } from "@/components/resource-options";
+import { EmptyState } from "@/components/states";
 import { clientApiRequest } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import {
+  appendResource,
   parseCreatedResource,
   type ResourceCollection,
+  type ResourceSummary,
 } from "@/lib/api/resources";
 import { useCsrfProtection } from "@/lib/api/use-csrf";
+import { dateValue, isoFromDateTimeInput, textValue } from "@/lib/forms";
 
 export function TermAdministration({
+  academicYears,
   canClose,
+  canManage,
   initialTerms,
   organizationId,
 }: {
+  readonly academicYears: readonly ResourceSummary[];
   readonly canClose: boolean;
+  readonly canManage: boolean;
   readonly initialTerms: ResourceCollection;
   readonly organizationId: string;
 }) {
   const [terms, setTerms] = useState(initialTerms);
+  const [creating, setCreating] = useState(false);
+  const [createMessage, setCreateMessage] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const csrfAvailable = useCsrfProtection();
 
+  async function createTerm(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setCreateMessage(null);
+    setCreateError(null);
+    const startsOn = dateValue(form.get("startsOn"));
+    const endsOn = dateValue(form.get("endsOn"));
+    const enrollmentDeadline = isoFromDateTimeInput(
+      form.get("enrollmentDeadline"),
+    );
+    if (!startsOn || !endsOn || !enrollmentDeadline) {
+      setCreateError(
+        "Enter valid start and end dates and an enrollment deadline.",
+      );
+      return;
+    }
+    setCreating(true);
+    try {
+      const created = await clientApiRequest(
+        "/api/v1/academics/terms",
+        parseCreatedResource,
+        {
+          method: "POST",
+          organizationId,
+          idempotencyKey: crypto.randomUUID(),
+          body: {
+            academic_year_id: textValue(form.get("academicYearId")),
+            name: textValue(form.get("name")),
+            starts_on: startsOn,
+            ends_on: endsOn,
+            enrollment_deadline: enrollmentDeadline,
+          },
+        },
+      );
+      setTerms((current) => appendResource(current, created));
+      setCreateMessage(`Term “${created.title}” was created.`);
+      formElement.reset();
+    } catch (caught) {
+      setCreateError(
+        caught instanceof ApiError
+          ? caught.message
+          : "The academic term could not be created.",
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function closeTerm(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setSubmitting(true);
     setMessage(null);
     setError(null);
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(formElement);
     const termId = String(form.get("termId") ?? "").trim();
     try {
       const closed = await clientApiRequest(
@@ -51,7 +114,7 @@ export function TermAdministration({
         ),
       }));
       setMessage(`“${closed.title}” is now closed.`);
-      event.currentTarget.reset();
+      formElement.reset();
     } catch (caught) {
       setError(
         caught instanceof ApiError
@@ -65,7 +128,70 @@ export function TermAdministration({
 
   return (
     <div className="notification-layout">
-      {terms.items.length > 0 ? <ResourceList collection={terms} /> : null}
+      {terms.items.length > 0 ? (
+        <ResourceList collection={terms} />
+      ) : (
+        <EmptyState message="No terms and semesters are available." />
+      )}
+      <form className="form-card" onSubmit={(event) => void createTerm(event)}>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Academic periods</p>
+            <h2>Create a term</h2>
+          </div>
+        </div>
+        <div className="form-grid">
+          <label>
+            Academic year
+            <select name="academicYearId" required defaultValue="">
+              <ResourceOptions
+                placeholder="Select an academic year"
+                resources={academicYears}
+              />
+            </select>
+          </label>
+          <label>
+            Term name
+            <input name="name" required maxLength={128} />
+          </label>
+          <label>
+            Starts on
+            <input name="startsOn" type="date" required />
+          </label>
+          <label>
+            Ends on
+            <input name="endsOn" type="date" required />
+          </label>
+          <label className="form-span">
+            Enrollment deadline
+            <input name="enrollmentDeadline" type="datetime-local" required />
+            <small>
+              Entered in your browser timezone and stored as a UTC instant.
+            </small>
+          </label>
+        </div>
+        <FormFeedback
+          canMutate={canManage}
+          csrfAvailable={csrfAvailable}
+          error={createError}
+          message={createMessage}
+          permissionNotice="Your current membership cannot manage academic periods."
+        />
+        <div className="form-actions">
+          <button
+            className="button"
+            type="submit"
+            disabled={
+              !canManage ||
+              !csrfAvailable ||
+              creating ||
+              academicYears.length === 0
+            }
+          >
+            {creating ? "Creating…" : "Create term"}
+          </button>
+        </div>
+      </form>
       <form className="form-card" onSubmit={(event) => void closeTerm(event)}>
         <div className="section-heading">
           <div>

@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import FastAPI
 
 from core.time import utc_now
+from grading.application.ports import ExternalGradeEvidenceDirectory
 from grading.application.ports import GradeTargetDirectory
 from grading.application.ports import GradingAuditSink
 from grading.application.ports import TermClosureDirectory
@@ -30,6 +31,7 @@ def create_official_grading_service(
     targets: GradeTargetDirectory,
     terms: TermClosureDirectory,
     audit: GradingAuditSink,
+    evidence: ExternalGradeEvidenceDirectory,
 ) -> OfficialGradingService:
     """Construct PostgreSQL grading persistence and explicit collaborators."""
 
@@ -40,6 +42,7 @@ def create_official_grading_service(
         term_writes=SQLAlchemyTermGradeWriteGuard(database),
         clock=SystemGradingClock(),
         audit=audit,
+        evidence=evidence,
     )
 
 

@@ -1,11 +1,18 @@
 """Moodle gateway, storage, and owning-domain acceptance ports."""
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from integrations.domain.moodle import GradeEvidenceDisposition
+from integrations.domain.moodle import GradeEvidenceReceipt
+from integrations.domain.moodle import GradeEvidenceStatus
 from integrations.domain.moodle import MoodleConfiguration
+from integrations.domain.moodle import MoodleCourseGradeObservation
 from integrations.domain.moodle import MoodleDeadlineEvidence
 from integrations.domain.moodle import MoodleFinalGradeEvidence
+from integrations.domain.moodle import MoodleGradeEvidenceRecord
+from integrations.domain.moodle import MoodleGradeReconciliationRun
 
 
 class MoodleGateway(Protocol):
@@ -52,6 +59,14 @@ class MoodleGateway(Protocol):
         """Return learning deadline evidence without claiming ERP ownership."""
         ...
 
+    async def list_course_grades(
+        self,
+        *,
+        external_course_id: str,
+    ) -> list[MoodleCourseGradeObservation]:
+        """Return course-total grade observations for one Moodle course shell."""
+        ...
+
 
 class MoodleGatewayFactory(Protocol):
     """Build a tenant-specific gateway from protected configuration."""
@@ -91,6 +106,22 @@ class MoodleIntegrationRepository(Protocol):
         """Return protected credential material to the infrastructure boundary."""
         ...
 
+    async def set_grade_event_secret(
+        self,
+        *,
+        organization_id: UUID,
+        encrypted_secret: str,
+    ) -> MoodleConfiguration:
+        """Store or rotate the protected grade-event signing secret."""
+        ...
+
+    async def get_encrypted_grade_event_secret(
+        self,
+        organization_id: UUID,
+    ) -> str | None:
+        """Return the protected signing secret only to the application boundary."""
+        ...
+
     async def put_mapping(
         self,
         *,
@@ -112,6 +143,16 @@ class MoodleIntegrationRepository(Protocol):
         """Resolve one tenant-scoped mapping."""
         ...
 
+    async def get_entity_id(
+        self,
+        *,
+        organization_id: UUID,
+        entity_type: str,
+        external_id: str,
+    ) -> UUID | None:
+        """Resolve one tenant-scoped mapping from its Moodle identifier."""
+        ...
+
     async def accept_grade_event_once(
         self,
         *,
@@ -126,10 +167,54 @@ class MoodleIntegrationRepository(Protocol):
         *,
         organization_id: UUID,
         external_event_id: str,
-        accepted: bool,
+        status: GradeEvidenceStatus,
         reason_code: str | None,
     ) -> None:
-        """Record the authoritative-domain acceptance outcome safely."""
+        """Record the authoritative-domain intake outcome safely."""
+        ...
+
+    async def get_grade_evidence(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+    ) -> MoodleGradeEvidenceRecord | None:
+        """Return one stored evidence record from exactly one tenant."""
+        ...
+
+    async def get_grade_evidence_by_event(
+        self,
+        *,
+        organization_id: UUID,
+        external_event_id: str,
+    ) -> MoodleGradeEvidenceRecord | None:
+        """Return stored evidence for one tenant external event key."""
+        ...
+
+    async def list_grade_evidence(
+        self,
+        *,
+        organization_id: UUID,
+        status: GradeEvidenceStatus | None,
+        course_offering_id: UUID | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[MoodleGradeEvidenceRecord, ...]:
+        """Return a bounded stable page of tenant evidence records."""
+        ...
+
+    async def resolve_grade_evidence(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+        status: GradeEvidenceStatus,
+        reason_code: str | None,
+        final_grade_id: UUID | None,
+        resolved_by: UUID,
+        resolved_at: datetime,
+    ) -> MoodleGradeEvidenceRecord:
+        """Resolve pending evidence exactly once under a tenant row lock."""
         ...
 
     async def record_success(
@@ -149,6 +234,43 @@ class MoodleIntegrationRepository(Protocol):
         ...
 
 
+class MoodleReconciliationRunRepository(Protocol):
+    """Persist operator-visible selected-term reconciliation state."""
+
+    async def create_run(
+        self,
+        run: MoodleGradeReconciliationRun,
+    ) -> None:
+        """Persist one newly started tenant reconciliation run."""
+        ...
+
+    async def complete_run(
+        self,
+        run: MoodleGradeReconciliationRun,
+    ) -> None:
+        """Persist the terminal outcome and counts of one tenant run."""
+        ...
+
+    async def get_run(
+        self,
+        *,
+        organization_id: UUID,
+        run_id: UUID,
+    ) -> MoodleGradeReconciliationRun | None:
+        """Return one run from exactly one tenant."""
+        ...
+
+    async def list_runs(
+        self,
+        *,
+        organization_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> tuple[MoodleGradeReconciliationRun, ...]:
+        """Return a bounded newest-first page of tenant runs."""
+        ...
+
+
 class FinalGradeEvidenceReceiver(Protocol):
     """Submit external evidence to the grading module's official policy."""
 
@@ -158,13 +280,48 @@ class FinalGradeEvidenceReceiver(Protocol):
         organization_id: UUID,
         evidence: MoodleFinalGradeEvidence,
         correlation_id: str,
-    ) -> bool:
-        """Return whether grading policy accepted the evidence officially."""
+    ) -> GradeEvidenceDisposition:
+        """Return how official grading policy dispositioned the evidence."""
+        ...
+
+
+class ExternalGradeEvidenceIntake(Protocol):
+    """Accept translated evidence through duplicate-safe tenant intake."""
+
+    async def receive_final_grade_evidence(
+        self,
+        *,
+        organization_id: UUID,
+        evidence: MoodleFinalGradeEvidence,
+        correlation_id: str,
+    ) -> GradeEvidenceReceipt:
+        """Store evidence once and report its intake outcome."""
+        ...
+
+
+class TermOfferingDirectory(Protocol):
+    """Resolve the course offerings of one tenant term through Academics."""
+
+    async def list_course_offering_ids(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> frozenset[UUID] | None:
+        """Return offering identifiers, or None when the tenant term is unknown."""
+        ...
+
+
+class IntegrationClock(Protocol):
+    """Supply explicit timezone-aware integration application time."""
+
+    def now(self) -> datetime:
+        """Return the current timezone-aware UTC time."""
         ...
 
 
 class MoodleIntegrationAuditSink(Protocol):
-    """Append privacy-minimized evidence for integration configuration."""
+    """Append privacy-minimized evidence for integration governance."""
 
     async def record_moodle_configuration_event(
         self,
@@ -178,11 +335,41 @@ class MoodleIntegrationAuditSink(Protocol):
         """Record configuration intent or outcome without sensitive material."""
         ...
 
+    async def record_grade_evidence_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID | None,
+        evidence_reference: str,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record grade-evidence intake or resolution without grade values."""
+        ...
+
+    async def record_grade_reconciliation_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        run_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record reconciliation intent or outcome without provider payloads."""
+        ...
+
 
 __all__ = [
+    "ExternalGradeEvidenceIntake",
     "FinalGradeEvidenceReceiver",
+    "IntegrationClock",
     "MoodleGateway",
     "MoodleGatewayFactory",
     "MoodleIntegrationAuditSink",
     "MoodleIntegrationRepository",
+    "MoodleReconciliationRunRepository",
+    "TermOfferingDirectory",
 ]

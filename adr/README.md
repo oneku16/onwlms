@@ -69,6 +69,7 @@ Among ADR statuses, only Accepted records are authoritative and constrain implem
 | [ADR-0007](ADR-0007-resumable-admissions-enrollment.md) | Proposed | Convert accepted applicants through resumable module-owned registrations |
 | [ADR-0008](ADR-0008-postgresql-scheduling-advisory-locks.md) | Proposed | Serialize concurrent scheduling resources with transaction-scoped PostgreSQL advisory locks |
 | [ADR-0009](ADR-0009-postgresql-term-grading-serialization.md) | Proposed | Serialize Academic term closure with official grade writes |
+| [ADR-0010](ADR-0010-moodle-grade-evidence-acceptance.md) | Proposed | Accept Moodle grade evidence only through signed intake and explicit Grading acceptance |
 
 ## Assumptions
 

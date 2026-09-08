@@ -27,6 +27,7 @@ from academics.application.service import ACADEMICS_SELECTION_OVERRIDE
 from academics.application.service import ACADEMICS_SELECTION_SUBMIT
 from academics.application.service import ACADEMICS_STRUCTURE_MANAGE
 from academics.application.service import AcademicAdministrationService
+from academics.application.service import AcademicEnrollmentTransitionService
 from academics.application.service import CourseSelectionService
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "AcademicAdministrationService",
     "AcademicCatalogRepository",
     "AcademicClock",
+    "AcademicEnrollmentTransitionService",
     "AcademicGradeTarget",
     "AcademicInstructionWindow",
     "AcademicProfileDirectory",

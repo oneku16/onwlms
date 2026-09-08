@@ -20,14 +20,18 @@ from academics.application.read_models import CourseSelectionEnrollmentOption
 from academics.application.read_models import CourseSelectionOfferingOption
 from academics.application.read_models import CourseSelectionTermOption
 from academics.application.read_models import StudentCourseSelectionContext
+from academics.application.service import MAX_ENROLLMENT_TRANSITION_EXPLANATION_LENGTH
 from academics.application.service import MAX_TERM_CLOSURE_EXPLANATION_LENGTH
 from academics.application.service import AcademicAdministrationService
+from academics.application.service import AcademicEnrollmentTransitionService
 from academics.application.service import CourseSelectionService
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
 from academics.domain.models import Cohort
 from academics.domain.models import Course
+from academics.domain.models import CourseEnrollment
+from academics.domain.models import CourseEnrollmentStatus
 from academics.domain.models import CourseOffering
 from academics.domain.models import CourseSelectionPolicy
 from academics.domain.models import CourseSelectionRequest
@@ -338,6 +342,41 @@ class StudentEnrollmentResponse(StudentEnrollmentBody):
         )
 
 
+class EnrollmentTransitionBody(_FrozenModel):
+    """Carry the required explanation for one audited enrollment transition."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    explanation: str = Field(
+        min_length=1,
+        max_length=MAX_ENROLLMENT_TRANSITION_EXPLANATION_LENGTH,
+    )
+
+
+class CourseEnrollmentResponse(_FrozenModel):
+    """Serialize one official course enrollment lifecycle fact."""
+
+    id: UUID
+    student_academic_enrollment_id: UUID
+    course_offering_id: UUID
+    credits: Decimal
+    status: CourseEnrollmentStatus
+    enrolled_at: datetime
+    selection_request_id: UUID | None
+
+    @classmethod
+    def from_domain(cls, value: CourseEnrollment) -> CourseEnrollmentResponse:
+        return cls(
+            id=value.id,
+            student_academic_enrollment_id=value.student_academic_enrollment_id,
+            course_offering_id=value.course_offering_id,
+            credits=value.credits,
+            status=value.status,
+            enrolled_at=value.enrolled_at,
+            selection_request_id=value.selection_request_id,
+        )
+
+
 class CurriculumCourseBody(_FrozenModel):
     course_id: UUID
     kind: CurriculumCourseKind
@@ -580,6 +619,17 @@ def _selection_service(request: Request) -> CourseSelectionService:
     service: object = getattr(request.app.state, "course_selection_service", None)
     if not isinstance(service, CourseSelectionService):
         raise RuntimeError("CourseSelectionService was not composed.")
+    return service
+
+
+def _enrollment_transition_service(
+    request: Request,
+) -> AcademicEnrollmentTransitionService:
+    service: object = getattr(
+        request.app.state, "academic_enrollment_transition_service", None
+    )
+    if not isinstance(service, AcademicEnrollmentTransitionService):
+        raise RuntimeError("AcademicEnrollmentTransitionService was not composed.")
     return service
 
 
@@ -994,6 +1044,120 @@ async def list_student_enrollments(
     return tuple(StudentEnrollmentResponse.from_domain(value) for value in values)
 
 
+@router.post(
+    "/student-enrollments/{enrollment_id}/withdraw",
+    response_model=StudentEnrollmentResponse,
+)
+async def withdraw_student_enrollment(
+    enrollment_id: UUID,
+    body: EnrollmentTransitionBody,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> StudentEnrollmentResponse:
+    """Withdraw one academic enrollment and cascade to its enrolled courses."""
+
+    service = _enrollment_transition_service(request)
+    value = await service.withdraw_student_enrollment(
+        context=_tenant_actor(actor),
+        enrollment_id=enrollment_id,
+        explanation=body.explanation,
+    )
+    return StudentEnrollmentResponse.from_domain(value)
+
+
+@router.post(
+    "/student-enrollments/{enrollment_id}/complete",
+    response_model=StudentEnrollmentResponse,
+)
+async def complete_student_enrollment(
+    enrollment_id: UUID,
+    body: EnrollmentTransitionBody,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> StudentEnrollmentResponse:
+    """Complete one academic enrollment once no course remains enrolled."""
+
+    service = _enrollment_transition_service(request)
+    value = await service.complete_student_enrollment(
+        context=_tenant_actor(actor),
+        enrollment_id=enrollment_id,
+        explanation=body.explanation,
+    )
+    return StudentEnrollmentResponse.from_domain(value)
+
+
+@router.get("/course-enrollments", response_model=tuple[CourseEnrollmentResponse, ...])
+async def list_course_enrollments(
+    request: Request,
+    actor: ActorDep,
+    student_academic_enrollment_id: UUID | None = None,
+    course_offering_id: UUID | None = None,
+    enrollment_status: Annotated[
+        CourseEnrollmentStatus | None,
+        Query(alias="status"),
+    ] = None,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
+) -> tuple[CourseEnrollmentResponse, ...]:
+    """Return a bounded page of official course enrollments for the tenant."""
+
+    values = await _administration_service(request).list_course_enrollments(
+        context=_tenant_actor(actor),
+        student_academic_enrollment_id=student_academic_enrollment_id,
+        course_offering_id=course_offering_id,
+        status=enrollment_status,
+        limit=limit,
+        offset=offset,
+    )
+    return tuple(CourseEnrollmentResponse.from_domain(value) for value in values)
+
+
+@router.post(
+    "/course-enrollments/{course_enrollment_id}/withdraw",
+    response_model=CourseEnrollmentResponse,
+)
+async def withdraw_course_enrollment(
+    course_enrollment_id: UUID,
+    body: EnrollmentTransitionBody,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> CourseEnrollmentResponse:
+    """Withdraw one course enrollment while its offering term remains open."""
+
+    service = _enrollment_transition_service(request)
+    value = await service.withdraw_course_enrollment(
+        context=_tenant_actor(actor),
+        course_enrollment_id=course_enrollment_id,
+        explanation=body.explanation,
+    )
+    return CourseEnrollmentResponse.from_domain(value)
+
+
+@router.post(
+    "/course-enrollments/{course_enrollment_id}/complete",
+    response_model=CourseEnrollmentResponse,
+)
+async def complete_course_enrollment(
+    course_enrollment_id: UUID,
+    body: EnrollmentTransitionBody,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> CourseEnrollmentResponse:
+    """Complete one course enrollment; finalization remains allowed after closure."""
+
+    service = _enrollment_transition_service(request)
+    value = await service.complete_course_enrollment(
+        context=_tenant_actor(actor),
+        course_enrollment_id=course_enrollment_id,
+        explanation=body.explanation,
+    )
+    return CourseEnrollmentResponse.from_domain(value)
+
+
 @router.put("/curricula/{curriculum_id}", response_model=CurriculumResponse)
 async def configure_curriculum(
     curriculum_id: UUID,
@@ -1151,6 +1315,7 @@ cast(object, student_course_selection_context)
 cast(object, submit_course_selection)
 
 __all__ = [
+    "CourseEnrollmentResponse",
     "CourseSelectionDecisionBody",
     "CourseSelectionEnrollmentOptionResponse",
     "CourseSelectionOfferingOptionResponse",
@@ -1158,6 +1323,7 @@ __all__ = [
     "CourseSelectionSubmissionBody",
     "CourseSelectionTermOptionResponse",
     "CurriculumBody",
+    "EnrollmentTransitionBody",
     "SelectionPolicyBody",
     "StudentCourseSelectionContextResponse",
     "StudentEnrollmentBody",

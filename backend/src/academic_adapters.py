@@ -3,8 +3,10 @@
 from datetime import datetime
 from uuid import UUID
 
+from academics.application.contracts import AcademicGradeTarget
 from academics.application.reference_service import AcademicReferenceService
 from grading.domain.models import GradeTarget
+from people.application.reference_service import PeopleReferenceService
 from scheduling.application.contracts import ExistingSchedulingReferences
 from scheduling.application.ports import TeacherAvailabilityDirectory
 from scheduling.application.ports import TeacherReferenceDirectory
@@ -53,8 +55,14 @@ class AdmissionsAcademicTargetAdapter:
 class AcademicGradeTargetAdapter:
     """Translate academic-owned grade facts to grading's consumer contract."""
 
-    def __init__(self, references: AcademicReferenceService) -> None:
+    def __init__(
+        self,
+        references: AcademicReferenceService,
+        *,
+        people: PeopleReferenceService,
+    ) -> None:
         self._references = references
+        self._people = people
 
     async def get_grade_target(
         self,
@@ -70,6 +78,43 @@ class AcademicGradeTargetAdapter:
         )
         if target is None:
             return None
+        return self._translate(target)
+
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_person_id: UUID,
+    ) -> GradeTarget | None:
+        """Resolve one person's official participation without guessing.
+
+        People owns the person-to-student-profile relationship and Academics
+        owns course participation, so both boundaries are consulted and an
+        absent or ambiguous answer at either resolves to None.
+        """
+
+        student_profile_id = await self._people.resolve_student_profile_id(
+            organization_id=organization_id,
+            person_id=student_person_id,
+        )
+        if student_profile_id is None:
+            return None
+        target = await self._references.get_grade_target_for_participant(
+            organization_id=organization_id,
+            course_offering_id=course_offering_id,
+            student_profile_id=student_profile_id,
+        )
+        if target is None:
+            return None
+        return self._translate(target)
+
+    @staticmethod
+    def _translate(
+        target: AcademicGradeTarget,
+    ) -> GradeTarget:
+        """Map an academic grade target to grading's own value object."""
+
         return GradeTarget(
             organization_id=target.organization_id,
             student_academic_enrollment_id=(target.student_academic_enrollment_id),

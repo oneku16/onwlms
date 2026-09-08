@@ -23,7 +23,7 @@ evidence, and shared platform availability.
 | API → application modules | role confusion, entitlement/permission confusion, direct state mutation | verified actor context at every protected use case, deny by default, separate permission and entitlement resolution, thin routes, explicit state machines and version/conflict checks |
 | State change → outbox/worker | lost event, duplicate effect, replay, cross-tenant job, poison payload, noisy tenant | atomic outbox publication, immutable tenant/correlation/version/idempotency context, `SKIP LOCKED` leases, idempotent handlers, bounded retries, quarantine, safe error codes, per-tenant metrics/limits, replay through normal policy |
 | OwnSIS → Moodle/providers | credential leakage, SSRF/redirect, provider compromise, timeout, duplicate effects | encrypted tenant credentials, clean HTTPS origin validation, no redirects, allowlisted functions, bounded timeouts, idempotency/mappings, anti-corruption translation, observable failure/reconciliation, no payload logging. Private/link-local/loopback resolution and approved-egress enforcement remain a production blocker before live Moodle calls are enabled. |
-| Moodle → official grading | forged/duplicate/stale evidence, Moodle becoming authoritative | authenticated integration path, tenant/external-event uniqueness, provenance and observed time, grading-module acceptance policy, immutable official revisions, rejected-state visibility |
+| Moodle → official grading | forged/duplicate/stale evidence, Moodle becoming authoritative, replayed or oversized events, ambiguous learner mapping | tenant-secret HMAC signature over timestamp and raw body compared in constant time, five-minute skew window, bounded body size, tenant/external-event uniqueness, provenance and observed time, audited signature failures, review-required intake that never writes a grade, explicit human acceptance in Grading with a named scale and the ordinary permission/closure/explanation rules, exactly-once evidence resolution with lineage, unmapped or ambiguous participations counted rather than inferred, rejected-state visibility |
 | MCP client/model → tools | stolen bearer, prompt/tool-output injection, fabricated IDs, overbroad scope, cross-user/tenant reads | OwnID bearer verification, required MCP scope, explicit organization input re-bound to membership, permission/resource/entitlement checks per call, minimum read-only tools, no database access, minimized outputs, audit; no grade writes |
 | Operators/support → tenant data | silent impersonation, broad database access, evidence destruction | no ordinary platform-admin tenant-data bypass, explicit tenant-bound support capability/reason/time limit, separate credentials, append-only audit, reviewed access, protected backup/restore procedures |
 | Build/deploy → runtime | compromised dependency/image, secret in source/image, mutable artifact | locked uv/npm dependencies, dependency/secret/image scans, multi-stage non-root images, runtime secrets, read-only CI permissions, source revision labels, artifact promotion policy |
@@ -113,6 +113,21 @@ initial grade after closure also preserves its explanation and closure flag as
 immutable Grading-owned recording evidence; later revisions cannot overwrite it,
 and authorized history readers can inspect it.
 
+### Forged or replayed Moodle grade evidence
+
+An attacker who can reach the grade-event ingress posts a fabricated course
+total, replays a captured event, or floods the endpoint. Without the tenant's
+signing secret the signature check fails in constant time and the attempt is
+audited as `signature_invalid` with no payload retained; a captured event
+replayed inside the skew window is suppressed by the tenant plus external-event
+key and reported as a duplicate; a stale timestamp is refused. Even a valid
+event only creates pending evidence, so a leaked secret cannot write an official
+grade: acceptance still requires a signed-in actor with the grading permission
+who names the scale, and Grading resolves the participation through People and
+Academics rather than trusting the event's identifiers. Rotating the secret
+through the configuration route invalidates the sender immediately. Rate
+limiting of the public ingress remains a deployment-edge responsibility.
+
 ### Integration credential or payload exfiltration
 
 An attacker causes a provider error or inspects status APIs. Credentials remain
@@ -130,7 +145,7 @@ duplicated. Attempts are bounded and terminal failure is quarantined visibly.
 
 ## Residual Risks and Required Human Review
 
-- Proposed ADR-0002 through ADR-0009 require architecture/security ownership and
+- Proposed ADR-0002 through ADR-0010 require architecture/security ownership and
   acceptance before production promotion.
 - Real OwnID issuer behavior, key rotation, revocation, logout, and claim shape
   require controlled-environment verification.
@@ -168,6 +183,9 @@ duplicated. Attempts are bounded and terminal failure is quarantined visibly.
 - Outbox duplicate, crash/retry, quarantine, and tenant-context tests pass.
 - Provider timeout, invalid authentication, redirect, malformed result, duplicate
   event, reconciliation, and disablement tests pass without payload disclosure.
+- Grade-event signature, timestamp-window, oversized-body, malformed-payload,
+  replay, cross-tenant evidence, exactly-once resolution, unmatched or ambiguous
+  participation, and closed-term acceptance tests pass.
 - MCP tools reject a different tenant, different person, unassigned section,
   unlinked student, missing permission, missing scope, and missing entitlement.
 - Images run non-root; dependency, image, and secret scans are reviewed; production

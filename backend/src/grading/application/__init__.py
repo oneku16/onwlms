@@ -1,5 +1,6 @@
 """Public official grading application surface."""
 
+from grading.application.ports import ExternalGradeEvidenceDirectory
 from grading.application.ports import GradeTargetDirectory
 from grading.application.ports import GradingClock
 from grading.application.ports import GradingRepository
@@ -18,6 +19,7 @@ __all__ = [
     "GRADING_FINAL_REVISE",
     "GRADING_SCALE_MANAGE",
     "GRADING_TRANSCRIPT_READ",
+    "ExternalGradeEvidenceDirectory",
     "GradeTargetDirectory",
     "GradingClock",
     "GradingRepository",

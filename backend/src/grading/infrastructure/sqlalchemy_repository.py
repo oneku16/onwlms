@@ -167,6 +167,25 @@ class SQLAlchemyGradingRepository:
             )
             return self._grade_from_model(model) if model is not None else None
 
+    async def get_final_grade_for_course_enrollment(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> FinalGrade | None:
+        """Return the current official grade of one tenant course enrollment."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            model = await session.scalar(
+                select(FinalGradeModel).where(
+                    FinalGradeModel.organization_id == organization_id,
+                    FinalGradeModel.course_enrollment_id == course_enrollment_id,
+                )
+            )
+            return self._grade_from_model(model) if model is not None else None
+
     async def revise_final_grade(
         self,
         *,

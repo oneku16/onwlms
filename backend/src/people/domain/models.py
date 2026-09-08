@@ -93,6 +93,8 @@ _TENANT_ADMIN_PERMISSIONS = (
             "scheduling.read",
             "integrations.configure",
             "integrations.read",
+            "integrations.grade_evidence.read",
+            "integrations.grade_evidence.reconcile",
             "provisioning.read",
             "provisioning.retry",
             "entitlements.read",

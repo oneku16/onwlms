@@ -29,6 +29,7 @@ from grading.domain.models import GradeTarget
 from grading.domain.models import GradingScale
 from grading.domain.models import GradingScaleTemplate
 from grading.domain.models import build_scale_from_template
+from grading.infrastructure.repository import InMemoryExternalGradeEvidenceDirectory
 from grading.infrastructure.repository import InMemoryGradeTargetDirectory
 from grading.infrastructure.repository import InMemoryGradingRepository
 from grading.infrastructure.repository import InMemoryTermClosureDirectory
@@ -65,6 +66,7 @@ class RecordingGradingAuditSink:
         fail_on_actions: set[str] | None = None,
     ) -> None:
         self.events: list[RecordedGradeAuditEvent] = []
+        self.external_events: list[tuple[str, UUID, str, str | None]] = []
         self.fail_on_actions = set(fail_on_actions or set())
 
     async def record_final_grade_event(
@@ -91,6 +93,22 @@ class RecordingGradingAuditSink:
                 outcome=outcome,
             )
         )
+
+    async def record_external_evidence_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        evidence_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str | None,
+    ) -> None:
+        del organization_id, actor_subject_id, correlation_id
+        if action in self.fail_on_actions:
+            raise RuntimeError("Grading audit is unavailable.")
+        self.external_events.append((action, evidence_id, outcome, reason))
 
 
 class ClosingOnEntryTermGradeWriteGuard:
@@ -192,6 +210,7 @@ async def _fixture(
         ),
         clock=FakeClock(datetime(2026, 8, 5, 10, tzinfo=UTC)),
         audit=audit,
+        evidence=InMemoryExternalGradeEvidenceDirectory(),
     )
     scale = build_scale_from_template(
         scale_id=uuid4(),

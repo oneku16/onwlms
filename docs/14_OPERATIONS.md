@@ -78,7 +78,7 @@ Real-provider testing requires the following additional configuration:
 | --- | --- |
 | OwnID browser login | `OWNID_ISSUER`, `OWNID_CLIENT_ID`, `OWNID_CLIENT_SECRET`, exact redirect and post-logout URLs, compatible scopes, and an OwnID client configured for Authorization Code + PKCE. |
 | First platform administrator | `PLATFORM_ADMIN_BOOTSTRAP_SECRET` containing at least 32 characters, held in the deployment secret system only until one signed-in OwnID subject completes bootstrap. A blank value disables bootstrap. |
-| Moodle | Tenant-scoped HTTPS Moodle base URL and least-privileged web-service token, encrypted through `PUT /api/v1/integrations/moodle/configuration`; required Moodle functions and tenant mappings must exist. No supported application workflow currently creates those mappings or orchestrates production provisioning, so credentials alone enable only the implemented status and bounded mapped-user reads. Live calls also require deployment egress policy and private/link-local/loopback destination enforcement; clean HTTPS syntax alone is not complete SSRF protection. |
+| Moodle | Tenant-scoped HTTPS Moodle base URL and least-privileged web-service token, encrypted through `PUT /api/v1/integrations/moodle/configuration`, plus an optional grade-event signing secret of at least 32 characters through `PUT /api/v1/integrations/moodle/grade-event-secret`; required Moodle functions (including `gradereport_user_get_grade_items` for reconciliation) and tenant mappings must exist. No supported application workflow currently creates those mappings or orchestrates production provisioning, so credentials alone enable only the implemented status, bounded mapped-user reads, and reconciliation of already mapped offerings and learners. Live calls also require deployment egress policy and private/link-local/loopback destination enforcement; clean HTTPS syntax alone is not complete SSRF protection. |
 | MCP | `MCP_ENABLED=true`, `MCP_AUDIENCE`, `MCP_RESOURCE_URL`, OwnID issuer/JWKS support, an access token carrying `ownsis:mcp:read`, an active membership, the correct role/resource relationship, and an enabled tenant MCP entitlement. The seeded development-base plan does not grant MCP. |
 
 Production settings additionally require secure cookies, HTTPS application and
@@ -254,6 +254,50 @@ Consequences for operation:
 - provider compatibility, throttling, timeout, malformed-response, and extended
   outage behavior remain credential-gated controlled-environment tests.
 
+## Moodle Grade Evidence
+
+Moodle course totals reach OwnSIS only as pending evidence. Two intake paths
+exist, and neither writes an official grade:
+
+- a Moodle-side sender may post one event to
+  `POST /api/v1/integrations/moodle/grade-events/{organization_id}` signed with
+  the tenant's grade-event secret (`X-OwnSIS-Timestamp` unix seconds and
+  `X-OwnSIS-Signature` as `v1=` plus the hex HMAC-SHA256 of
+  `v1:{timestamp}:` followed by the raw body); unsigned, forged, stale, or
+  oversized deliveries are refused and audited without payload contents, and a
+  replayed event is reported as a duplicate; and
+- an administrator holding `integrations.grade_evidence.reconcile` may run
+  `POST /api/v1/integrations/moodle/grade-reconciliations` for one term, which
+  observes the course totals of every mapped offering and mapped learner and
+  records a run with its counts; runs are listed at
+  `GET /api/v1/integrations/moodle/grade-reconciliations`.
+
+Administrators holding `integrations.grade_evidence.read` review pending,
+accepted, and rejected evidence at `GET /api/v1/integrations/moodle/grade-evidence`
+(the Moodle integration page in the web application). An actor holding
+`grading.final_grade.record` accepts one item with a named grading scale through
+`POST /api/v1/grading/external-evidence/{evidence_id}/accept`, which records an
+initial grade or, when a grade already exists, a revision that also requires
+the revise permission and an explanation; closed terms require the closed-term
+permission and an explanation. `.../reject` records an audited reason. Every
+item resolves exactly once and keeps the accepted grade identifier as lineage.
+
+Consequences for operation:
+
+- a failed reconciliation run is stored with a safe error code and marks the
+  integration degraded; rerunning after the cause is fixed is safe because
+  duplicate observations are suppressed by the tenant plus event key;
+- unmapped offerings and learners are counted in the run rather than guessed;
+  add the missing tenant mappings and rerun;
+- an event that arrives before the signing secret is configured is refused with
+  `401`; configure the secret, then ask the sender to redeliver;
+- rotating the signing secret invalidates the previous sender immediately;
+- acceptance and the evidence write-back are two transactions in two modules,
+  so a crash between them can leave an official grade with evidence still
+  pending; a second acceptance then produces an audited revision, never a
+  duplicate grade; and
+- rate limiting of the public ingress is a deployment-edge responsibility.
+
 MCP is disabled by default. Enabling the MCP mount does not bypass ordinary
 portal behavior or authorization; each tool invocation revalidates OwnID subject,
 membership, permission, resource ownership, tenant, and MCP entitlement and
@@ -365,6 +409,11 @@ Common cases:
   the normal review workflow.
 - **Dependency audit cannot reach a registry:** retain the failure result and
   retry when the registry is available. Do not claim `make validate` passed.
+- **Moodle grade events are refused:** check that the tenant secret is
+  configured (`grade_events_configured` in the status response), that the
+  sender signs the raw body with the documented version prefix and a current
+  unix timestamp, and read the audit log for `signature_invalid` or
+  `payload_invalid` outcomes; payloads are never stored.
 - **Moodle deadlines fail:** check the safe status at
   `GET /api/v1/integrations/moodle/status`, tenant entitlement, person mapping,
   token function permissions, and provider availability. Do not log the token or

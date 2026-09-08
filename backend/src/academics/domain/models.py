@@ -13,6 +13,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from academics.domain.exceptions import AcademicRuleError
+from academics.domain.exceptions import EnrollmentTransitionError
 
 
 class EducationMode(StrEnum):
@@ -329,6 +330,26 @@ class StudentAcademicEnrollment:
 
         _require_aware(self.enrolled_at, "Academic enrollment time")
 
+    def withdraw(self) -> StudentAcademicEnrollment:
+        """Return the withdrawn enrollment; only active participation may withdraw."""
+
+        self._require_active("withdrawn")
+        return replace(self, status=AcademicEnrollmentStatus.WITHDRAWN)
+
+    def complete(self) -> StudentAcademicEnrollment:
+        """Return the completed enrollment; only active participation may complete."""
+
+        self._require_active("completed")
+        return replace(self, status=AcademicEnrollmentStatus.COMPLETED)
+
+    def _require_active(self, transition: str) -> None:
+        """Reject terminal states because academic transitions are one way."""
+
+        if self.status is not AcademicEnrollmentStatus.ACTIVE:
+            raise EnrollmentTransitionError(
+                f"Only an active academic enrollment can be {transition}."
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class CourseEnrollment:
@@ -349,6 +370,26 @@ class CourseEnrollment:
         if self.credits <= Decimal(0):
             raise AcademicRuleError("Course enrollment credits must be positive.")
         _require_aware(self.enrolled_at, "Course enrollment time")
+
+    def withdraw(self) -> CourseEnrollment:
+        """Return the withdrawn enrollment; only enrolled participation may withdraw."""
+
+        self._require_enrolled("withdrawn")
+        return replace(self, status=CourseEnrollmentStatus.WITHDRAWN)
+
+    def complete(self) -> CourseEnrollment:
+        """Return the completed enrollment; only enrolled participation may complete."""
+
+        self._require_enrolled("completed")
+        return replace(self, status=CourseEnrollmentStatus.COMPLETED)
+
+    def _require_enrolled(self, transition: str) -> None:
+        """Reject terminal states because course transitions are one way."""
+
+        if self.status is not CourseEnrollmentStatus.ENROLLED:
+            raise EnrollmentTransitionError(
+                f"Only an enrolled course enrollment can be {transition}."
+            )
 
 
 @dataclass(frozen=True, slots=True)

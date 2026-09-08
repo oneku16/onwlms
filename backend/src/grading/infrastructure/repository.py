@@ -7,6 +7,7 @@ from uuid import UUID
 
 from core.errors import ConflictError
 from grading.domain.exceptions import GradeRevisionConflictError
+from grading.domain.models import ExternalGradeEvidence
 from grading.domain.models import FinalGrade
 from grading.domain.models import GradeRevision
 from grading.domain.models import GradeTarget
@@ -26,6 +27,7 @@ class InMemoryGradeTargetDirectory:
             (target.organization_id, target.course_enrollment_id): target
             for target in targets
         }
+        self._participants: dict[tuple[UUID, UUID, UUID], GradeTarget] = {}
 
     async def get_grade_target(
         self,
@@ -37,10 +39,36 @@ class InMemoryGradeTargetDirectory:
 
         return self._targets.get((organization_id, course_enrollment_id))
 
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_person_id: UUID,
+    ) -> GradeTarget | None:
+        """Return an explicitly registered person participation in one offering."""
+
+        return self._participants.get(
+            (organization_id, course_offering_id, student_person_id)
+        )
+
     def add(self, target: GradeTarget) -> None:
         """Register an academic grade target for deterministic tests."""
 
         self._targets[(target.organization_id, target.course_enrollment_id)] = target
+
+    def add_participant(
+        self,
+        target: GradeTarget,
+        *,
+        student_person_id: UUID,
+    ) -> None:
+        """Register which person participates through one grade target."""
+
+        self.add(target)
+        self._participants[
+            (target.organization_id, target.course_offering_id, student_person_id)
+        ] = target
 
 
 class InMemoryTermClosureDirectory:
@@ -176,6 +204,21 @@ class InMemoryGradingRepository:
 
         return self._grades.get((organization_id, final_grade_id))
 
+    async def get_final_grade_for_course_enrollment(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> FinalGrade | None:
+        """Return the current official grade of one tenant course enrollment."""
+
+        grade_id = self._course_enrollment_index.get(
+            (organization_id, course_enrollment_id)
+        )
+        if grade_id is None:
+            return None
+        return self._grades.get((organization_id, grade_id))
+
     async def revise_final_grade(
         self,
         *,
@@ -250,7 +293,73 @@ class InMemoryGradingRepository:
         return tuple(sorted(revisions, key=lambda item: item.revision_number))
 
 
+class InMemoryExternalGradeEvidenceDirectory:
+    """Hold pending external evidence and record explicit resolutions."""
+
+    def __init__(self) -> None:
+        self._pending: dict[TenantKey, ExternalGradeEvidence] = {}
+        self.acceptances: list[tuple[UUID, UUID, UUID, UUID]] = []
+        self.rejections: list[tuple[UUID, UUID, str, UUID]] = []
+
+    def add(
+        self,
+        *,
+        organization_id: UUID,
+        evidence: ExternalGradeEvidence,
+    ) -> None:
+        """Register pending evidence for one tenant."""
+
+        self._pending[(organization_id, evidence.evidence_id)] = evidence
+
+    async def get_pending_evidence(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+    ) -> ExternalGradeEvidence | None:
+        """Return evidence only while it is pending in the requested tenant."""
+
+        return self._pending.get((organization_id, evidence_id))
+
+    async def record_acceptance(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+        final_grade_id: UUID,
+        actor_subject_id: UUID,
+        correlation_id: str,
+    ) -> None:
+        """Resolve pending evidence as accepted exactly once."""
+
+        del correlation_id
+        if self._pending.pop((organization_id, evidence_id), None) is None:
+            raise ConflictError("External grade evidence was already resolved.")
+        self.acceptances.append(
+            (organization_id, evidence_id, final_grade_id, actor_subject_id)
+        )
+
+    async def record_rejection(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+        reason_code: str,
+        actor_subject_id: UUID,
+        correlation_id: str,
+    ) -> None:
+        """Resolve pending evidence as rejected exactly once."""
+
+        del correlation_id
+        if self._pending.pop((organization_id, evidence_id), None) is None:
+            raise ConflictError("External grade evidence was already resolved.")
+        self.rejections.append(
+            (organization_id, evidence_id, reason_code, actor_subject_id)
+        )
+
+
 __all__ = [
+    "InMemoryExternalGradeEvidenceDirectory",
     "InMemoryGradeTargetDirectory",
     "InMemoryGradingRepository",
     "InMemoryTermClosureDirectory",

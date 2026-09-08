@@ -81,6 +81,8 @@ def test_first_release_admin_routes_are_explicit_and_complete() -> None:
         ("/api/v1/grading/scales", "POST"),
         ("/api/v1/grading/scale-templates", "POST"),
         ("/api/v1/grading/scales", "GET"),
+        ("/api/v1/grading/external-evidence/{evidence_id}/accept", "POST"),
+        ("/api/v1/grading/external-evidence/{evidence_id}/reject", "POST"),
         ("/api/v1/scheduling/sessions/{session_id}", "GET"),
         ("/api/v1/scheduling/generation/apply", "POST"),
     }

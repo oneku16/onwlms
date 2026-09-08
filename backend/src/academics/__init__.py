@@ -9,6 +9,7 @@ from academics.application import ACADEMICS_STRUCTURE_MANAGE
 from academics.application import MAX_SCHEDULING_REFERENCE_HORIZON
 from academics.application import AcademicAdministrationService
 from academics.application import AcademicCatalogRepository
+from academics.application import AcademicEnrollmentTransitionService
 from academics.application import AcademicGradeTarget
 from academics.application import AcademicInstructionWindow
 from academics.application import AcademicProfileDirectory
@@ -36,6 +37,7 @@ __all__ = [
     "MAX_SCHEDULING_REFERENCE_HORIZON",
     "AcademicAdministrationService",
     "AcademicCatalogRepository",
+    "AcademicEnrollmentTransitionService",
     "AcademicGradeTarget",
     "AcademicInstructionWindow",
     "AcademicProfileDirectory",

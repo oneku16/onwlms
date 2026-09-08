@@ -60,6 +60,14 @@ export const navigationSections: readonly NavigationSection[] = [
         },
       },
       {
+        label: "Features",
+        href: "/platform/features",
+        access: {
+          roles: ["PlatformAdmin"],
+          permissions: ["entitlements.platform.manage"],
+        },
+      },
+      {
         label: "Subscriptions",
         href: "/platform/subscriptions",
         access: {
@@ -106,11 +114,22 @@ export const navigationSections: readonly NavigationSection[] = [
         ],
         ["Programs", "/organization/programs", "academics.structure.manage"],
         [
+          "Academic years",
+          "/organization/academic-years",
+          "academics.structure.manage",
+        ],
+        [
           "Academic calendar",
           "/organization/calendar",
           "academics.structure.manage",
         ],
         ["Terms", "/organization/terms", "academics.structure.manage"],
+        ["Curricula", "/organization/curricula", "academics.curriculum.manage"],
+        [
+          "Course-selection policies",
+          "/organization/course-selection-policies",
+          "academics.curriculum.manage",
+        ],
         [
           "Grading scales",
           "/organization/grading-scales",
@@ -122,6 +141,16 @@ export const navigationSections: readonly NavigationSection[] = [
           "grading.final_grade.revise",
         ],
         ["Courses", "/organization/courses", "academics.structure.manage"],
+        [
+          "Course offerings",
+          "/organization/course-offerings",
+          "academics.structure.manage",
+        ],
+        [
+          "Teacher assignments",
+          "/organization/teacher-assignments",
+          "academics.structure.manage",
+        ],
         [
           "Groups and cohorts",
           "/organization/groups",
@@ -135,10 +164,20 @@ export const navigationSections: readonly NavigationSection[] = [
           "people.memberships.manage",
         ],
         ["Students", "/organization/students", "people.read"],
+        [
+          "Student enrollments",
+          "/organization/student-enrollments",
+          "academics.enrollment.manage",
+        ],
         ["Teachers", "/organization/teachers", "people.read"],
         ["Staff", "/organization/staff", "people.read"],
         ["Guardians", "/organization/guardians", "people.read"],
         ["Admissions", "/organization/admissions", "admissions.review"],
+        [
+          "Admissions policies",
+          "/organization/admissions-policies",
+          "admissions.policy.manage",
+        ],
         [
           "Enrollment approvals",
           "/organization/enrollment-approvals",

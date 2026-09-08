@@ -8,15 +8,38 @@ export type OperationalPageKind =
   | "subscription-assignment"
   | "entitlement-override"
   | "platform-administrators"
+  | "plan-administration"
+  | "feature-administration"
   | "membership-administration"
   | "course-selection"
   | "enrollment-approvals"
   | "grade-amendment"
   | "guardian-grades"
-  | "calendar"
   | "notifications"
   | "teacher-roster"
+  | "campus-administration"
+  | "faculty-administration"
+  | "department-administration"
+  | "program-administration"
+  | "academic-year-administration"
+  | "calendar-administration"
   | "term-administration"
+  | "curriculum-administration"
+  | "selection-policy-administration"
+  | "grading-scale-administration"
+  | "course-administration"
+  | "course-offering-administration"
+  | "teacher-assignment-administration"
+  | "cohort-administration"
+  | "room-administration"
+  | "people-administration"
+  | "student-enrollment-administration"
+  | "guardian-administration"
+  | "admissions-workflow"
+  | "admissions-policy-administration"
+  | "provisioning-administration"
+  | "organization-branding"
+  | "moodle-integration"
   | "unavailable";
 
 export interface OperationalPageDefinition {
@@ -75,9 +98,19 @@ export const operationalPages: Readonly<
   "/platform/plans": {
     title: "Plans",
     description:
-      "Review available product plans without conflating them with user permissions.",
+      "Review and create product plans without conflating them with user permissions.",
     endpoint: "/api/v1/platform/plans",
     emptyMessage: "No plans are configured.",
+    kind: "plan-administration",
+    access: platformAccess("entitlements.platform.manage"),
+  },
+  "/platform/features": {
+    title: "Features",
+    description:
+      "Register the stable product features that plans and overrides can grant.",
+    endpoint: "/api/v1/platform/features",
+    emptyMessage: "No features are registered.",
+    kind: "feature-administration",
     access: platformAccess("entitlements.platform.manage"),
   },
   "/platform/subscriptions": {
@@ -115,48 +148,70 @@ export const operationalPages: Readonly<
     "Maintain the campuses owned by the active organization.",
     "/api/v1/campuses",
     "organizations.campuses.manage",
+    "campus-administration",
   ),
   "/organization/faculties": organizationPage(
     "Faculties",
-    "Review the active organization's faculty structure.",
+    "Review and extend the active organization's faculty structure.",
     "/api/v1/academics/faculties",
     "academics.structure.manage",
+    "faculty-administration",
   ),
   "/organization/departments": organizationPage(
     "Departments",
-    "Review departments within the active organization.",
+    "Review and create departments within the active organization.",
     "/api/v1/academics/departments",
     "academics.structure.manage",
+    "department-administration",
   ),
   "/organization/programs": organizationPage(
     "Programs",
-    "Review academic programs and education modes.",
+    "Review and create academic programs and their education modes.",
     "/api/v1/academics/programs",
     "academics.structure.manage",
+    "program-administration",
   ),
-  "/organization/calendar": {
-    ...organizationPage(
-      "Academic calendar",
-      "Review organization-wide instructional and closure dates.",
-      "/api/v1/academics/calendar-events",
-      "academics.structure.manage",
-    ),
-    kind: "calendar",
+  "/organization/academic-years": organizationPage(
+    "Academic years",
+    "Review and create the academic years that frame terms, cohorts, and curricula.",
+    "/api/v1/academics/academic-years",
+    "academics.structure.manage",
+    "academic-year-administration",
+  ),
+  "/organization/calendar": organizationPage(
+    "Academic calendar",
+    "Review and record organization-wide instructional and closure dates.",
+    "/api/v1/academics/calendar-events",
+    "academics.structure.manage",
+    "calendar-administration",
+  ),
+  "/organization/terms": organizationPage(
+    "Terms and semesters",
+    "Create academic periods and apply the audited one-way closure transition.",
+    "/api/v1/academics/terms",
+    "academics.structure.manage",
+    "term-administration",
+  ),
+  "/organization/curricula": {
+    title: "Curricula",
+    description:
+      "Configure the required and elective courses of a program for an academic year.",
+    kind: "curriculum-administration",
+    access: organizationAdminAccess("academics.curriculum.manage"),
   },
-  "/organization/terms": {
-    ...organizationPage(
-      "Terms and semesters",
-      "Review academic periods and apply the audited one-way closure transition.",
-      "/api/v1/academics/terms",
-      "academics.structure.manage",
-    ),
-    kind: "term-administration",
+  "/organization/course-selection-policies": {
+    title: "Course-selection policies",
+    description:
+      "Configure approval, deadline, and credit limits for course selection per program and term.",
+    kind: "selection-policy-administration",
+    access: organizationAdminAccess("academics.curriculum.manage"),
   },
   "/organization/grading-scales": organizationPage(
     "Grading scales",
-    "Review official grading scales and mappings.",
+    "Review official grading scales and create template copies or custom band mappings.",
     "/api/v1/grading/scales",
     "grading.scale.manage",
+    "grading-scale-administration",
   ),
   "/organization/grade-amendments": {
     title: "Grade amendments",
@@ -167,27 +222,45 @@ export const operationalPages: Readonly<
   },
   "/organization/courses": organizationPage(
     "Courses",
-    "Review courses, credit values, and offering summaries.",
+    "Review and create courses with their credit values.",
     "/api/v1/academics/courses",
     "academics.structure.manage",
+    "course-administration",
+  ),
+  "/organization/course-offerings": organizationPage(
+    "Course offerings",
+    "Review and create term-scoped course sections with meeting windows.",
+    "/api/v1/academics/course-offerings",
+    "academics.structure.manage",
+    "course-offering-administration",
+  ),
+  "/organization/teacher-assignments": organizationPage(
+    "Teacher assignments",
+    "Assign tenant teacher profiles to course offerings.",
+    "/api/v1/academics/teacher-assignments",
+    "academics.structure.manage",
+    "teacher-assignment-administration",
   ),
   "/organization/groups": organizationPage(
     "Groups and cohorts",
-    "Review student groups used by enrollment and scheduling.",
+    "Review and create student groups used by enrollment and scheduling.",
     "/api/v1/academics/cohorts",
     "academics.structure.manage",
+    "cohort-administration",
   ),
   "/organization/rooms": organizationPage(
     "Rooms",
-    "Review room capacity and activity-type suitability.",
+    "Review and create rooms with capacity and activity-type suitability.",
     "/api/v1/academics/rooms",
     "academics.structure.manage",
+    "room-administration",
   ),
   "/organization/people": organizationPage(
     "People",
-    "Review privacy-conscious person summaries for this organization.",
+    "Review privacy-conscious person summaries and add people or profiles.",
     "/api/v1/organizations/current/people",
     "people.read",
+    "people-administration",
   ),
   "/organization/memberships": {
     ...organizationPage(
@@ -204,6 +277,13 @@ export const operationalPages: Readonly<
     "/api/v1/organizations/current/students",
     "people.read",
   ),
+  "/organization/student-enrollments": organizationPage(
+    "Student enrollments",
+    "Enroll student profiles into programs for an academic year.",
+    "/api/v1/academics/student-enrollments",
+    "academics.enrollment.manage",
+    "student-enrollment-administration",
+  ),
   "/organization/teachers": organizationPage(
     "Teachers",
     "Review teacher profiles and current institutional relationships.",
@@ -218,16 +298,25 @@ export const operationalPages: Readonly<
   ),
   "/organization/guardians": organizationPage(
     "Guardians",
-    "Review authorized guardian-to-student relationship summaries.",
+    "Review guardian profiles and link them to students.",
     "/api/v1/organizations/current/guardians",
     "people.read",
+    "guardian-administration",
   ),
   "/organization/admissions": organizationPage(
     "Admissions",
-    "Review application lifecycle, decisions, and intake status.",
+    "Create, submit, review, and decide applications, then convert accepted applicants.",
     "/api/v1/admissions/applications",
     "admissions.review",
+    "admissions-workflow",
   ),
+  "/organization/admissions-policies": {
+    title: "Admissions policies",
+    description:
+      "Configure review stages, deposits, reservation windows, and seat quotas per program and intake.",
+    kind: "admissions-policy-administration",
+    access: organizationAdminAccess("admissions.policy.manage"),
+  },
   "/organization/enrollment-approvals": {
     ...organizationPage(
       "Enrollment approvals",
@@ -239,15 +328,17 @@ export const operationalPages: Readonly<
   },
   "/organization/provisioning": organizationPage(
     "Provisioning status",
-    "Monitor retryable OwnID, Moodle, Microsoft 365, and notification work.",
+    "Monitor and retry OwnID, Moodle, Microsoft 365, and notification work.",
     "/api/v1/operations/provisioning",
     "provisioning.read",
+    "provisioning-administration",
   ),
   "/organization/branding": organizationPage(
     "Organization branding",
-    "Review display name, colors, logo metadata, locale, and domain configuration.",
+    "Maintain display name, colors, locale, timezone, and domain configuration.",
     "/api/v1/organization",
     "organizations.read",
+    "organization-branding",
   ),
   "/organization/audit": organizationPage(
     "Audit log",
@@ -258,9 +349,10 @@ export const operationalPages: Readonly<
   "/organization/moodle": {
     ...organizationPage(
       "Moodle integration",
-      "Review configured Moodle connectivity and the latest safe status evidence.",
+      "Configure Moodle connectivity and review the latest safe status evidence.",
       "/api/v1/integrations/moodle/status",
       "integrations.read",
+      "moodle-integration",
     ),
     access: {
       ...organizationAdminAccess("integrations.read"),
@@ -460,6 +552,7 @@ function organizationPage(
   description: string,
   endpoint: `/api/v1/${string}`,
   permission: string,
+  kind?: OperationalPageKind,
 ): OperationalPageDefinition {
   return {
     title,
@@ -467,6 +560,7 @@ function organizationPage(
     endpoint,
     emptyMessage: `No ${title.toLowerCase()} are available.`,
     access: organizationAdminAccess(permission),
+    ...(kind === undefined ? {} : { kind }),
   };
 }
 

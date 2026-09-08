@@ -1,5 +1,6 @@
 """Tests for centralized base, subscription, override, and permission policy."""
 
+from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -8,14 +9,19 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
+from httpx import AsyncClient
 from pydantic import ValidationError as PydanticValidationError
 
 from core.context import PlatformActorContext
 from core.context import TenantActorContext
 from core.errors import AuthorizationError
+from core.http import install_error_handlers
 from entitlements.application.service import MANAGE_ENTITLEMENTS_PERMISSION
 from entitlements.application.service import READ_ENTITLEMENTS_PERMISSION
 from entitlements.application.service import EntitlementService
+from entitlements.domain.exceptions import EntitlementConflictError
 from entitlements.domain.exceptions import EntitlementNotFoundError
 from entitlements.domain.exceptions import InvalidEntitlementError
 from entitlements.domain.models import EntitlementOverride
@@ -29,6 +35,9 @@ from entitlements.domain.models import SubscriptionStatus
 from entitlements.domain.models import UsageLimit
 from entitlements.domain.models import UsagePeriod
 from entitlements.presentation.router import AssignSubscriptionRequest
+from entitlements.presentation.router import router
+from identity.presentation.dependencies import require_actor
+from identity.presentation.dependencies import require_csrf
 
 NOW = datetime(2026, 8, 5, 12, tzinfo=UTC)
 
@@ -73,6 +82,40 @@ class FakeEntitlementRepository:
 
     async def assign_subscription(self, subscription: Subscription) -> None:
         self.subscriptions.append(subscription)
+
+    async def get_current_subscription(
+        self,
+        *,
+        organization_id: UUID,
+    ) -> Subscription | None:
+        return next(
+            (
+                subscription
+                for subscription in reversed(self.subscriptions)
+                if subscription.organization_id == organization_id
+            ),
+            None,
+        )
+
+    async def update_subscription(
+        self,
+        subscription: Subscription,
+        *,
+        expected_status: SubscriptionStatus,
+    ) -> None:
+        for index, existing in enumerate(self.subscriptions):
+            if (existing.organization_id, existing.id) != (
+                subscription.organization_id,
+                subscription.id,
+            ):
+                continue
+            if existing.status is not expected_status:
+                raise EntitlementConflictError(
+                    "Subscription changed during the transition"
+                )
+            self.subscriptions[index] = subscription
+            return
+        raise EntitlementNotFoundError("Subscription was not found")
 
     async def set_override(self, override: EntitlementOverride) -> None:
         self.overrides.append(override)
@@ -561,3 +604,404 @@ def test_disabled_override_cannot_retain_usage_limit() -> None:
             enabled=False,
             usage_limit=UsageLimit(amount=10, period=UsagePeriod.MONTH),
         )
+
+
+class RacingEntitlementRepository(FakeEntitlementRepository):
+    """Cancel the subscription behind the service's back after it is read."""
+
+    async def get_current_subscription(
+        self,
+        *,
+        organization_id: UUID,
+    ) -> Subscription | None:
+        current = await super().get_current_subscription(
+            organization_id=organization_id,
+        )
+        if current is not None and current.status is SubscriptionStatus.ACTIVE:
+            # A concurrent platform administrator commits a cancellation
+            # between this read and the caller's locked write.
+            await super().update_subscription(
+                current.cancel(),
+                expected_status=current.status,
+            )
+        return current
+
+
+@dataclass(slots=True)
+class CsrfCounter:
+    """Count CSRF validations performed by the overridden dependency."""
+
+    calls: int = 0
+
+
+def _subscription(
+    *,
+    organization_id: UUID,
+    status: SubscriptionStatus,
+) -> Subscription:
+    return Subscription(
+        id=uuid4(),
+        organization_id=organization_id,
+        plan_id=uuid4(),
+        status=status,
+        starts_at=NOW - timedelta(days=1),
+    )
+
+
+def _application(
+    service: EntitlementService,
+    *,
+    actor: PlatformActorContext | TenantActorContext,
+) -> tuple[FastAPI, CsrfCounter]:
+    csrf = CsrfCounter()
+
+    async def actor_dependency() -> PlatformActorContext | TenantActorContext:
+        return actor
+
+    async def csrf_dependency() -> None:
+        csrf.calls += 1
+
+    app = FastAPI()
+    app.state.entitlement_service = service
+    install_error_handlers(app)
+    app.include_router(router)
+    app.dependency_overrides[require_actor] = actor_dependency
+    app.dependency_overrides[require_csrf] = csrf_dependency
+    return app, csrf
+
+
+def test_subscription_lifecycle_transitions_are_explicit_and_terminal() -> None:
+    organization_id = uuid4()
+    active = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    trialing = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.TRIALING,
+    )
+
+    suspended = active.suspend()
+    canceled = active.cancel()
+
+    assert suspended.status is SubscriptionStatus.SUSPENDED
+    assert suspended.id == active.id
+    assert suspended.is_effective(at=NOW) is False
+    assert active.status is SubscriptionStatus.ACTIVE
+    assert trialing.suspend().status is SubscriptionStatus.SUSPENDED
+    assert suspended.reactivate().status is SubscriptionStatus.ACTIVE
+    assert canceled.status is SubscriptionStatus.CANCELED
+    assert trialing.cancel().status is SubscriptionStatus.CANCELED
+    assert suspended.cancel().status is SubscriptionStatus.CANCELED
+    with pytest.raises(InvalidEntitlementError, match="active subscription"):
+        active.reactivate()
+    with pytest.raises(InvalidEntitlementError, match="trialing subscription"):
+        trialing.reactivate()
+    with pytest.raises(InvalidEntitlementError, match="cannot be suspended"):
+        suspended.suspend()
+    with pytest.raises(InvalidEntitlementError, match="canceled subscription"):
+        canceled.suspend()
+    with pytest.raises(InvalidEntitlementError, match="cannot be reactivated"):
+        canceled.reactivate()
+    with pytest.raises(InvalidEntitlementError, match="cannot be canceled"):
+        canceled.cancel()
+
+
+async def test_subscription_lifecycle_is_audited_through_platform_authority() -> None:
+    organization_id = uuid4()
+    audit = FakeEntitlementAuditSink()
+    service, repository = _service(audit=audit)
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.TRIALING,
+    )
+    other = _subscription(organization_id=uuid4(), status=SubscriptionStatus.ACTIVE)
+    repository.subscriptions.extend((subscription, other))
+
+    suspended = await service.suspend_subscription(
+        actor=_platform(),
+        organization_id=organization_id,
+    )
+    reactivated = await service.reactivate_subscription(
+        actor=_platform(),
+        organization_id=organization_id,
+    )
+    canceled = await service.cancel_subscription(
+        actor=_platform(),
+        organization_id=organization_id,
+    )
+
+    assert suspended.status is SubscriptionStatus.SUSPENDED
+    assert reactivated.status is SubscriptionStatus.ACTIVE
+    assert canceled.status is SubscriptionStatus.CANCELED
+    assert canceled.id == subscription.id
+    assert repository.subscriptions == [canceled, other]
+    assert (
+        await service.get_current_subscription(
+            actor=_platform(),
+            organization_id=organization_id,
+        )
+        == canceled
+    )
+    assert (
+        await service.get_current_subscription(
+            actor=_platform(),
+            organization_id=other.organization_id,
+        )
+        == other
+    )
+    assert audit.events == [
+        ("subscription.suspension_requested", subscription.id, "intent_recorded"),
+        ("subscription.suspended", subscription.id, "succeeded"),
+        ("subscription.reactivation_requested", subscription.id, "intent_recorded"),
+        ("subscription.reactivated", subscription.id, "succeeded"),
+        ("subscription.cancellation_requested", subscription.id, "intent_recorded"),
+        ("subscription.canceled", subscription.id, "succeeded"),
+    ]
+
+
+async def test_subscription_lifecycle_reports_missing_subscriptions_as_not_found() -> (
+    None
+):
+    audit = FakeEntitlementAuditSink()
+    service, repository = _service(audit=audit)
+    unknown_organization_id = uuid4()
+
+    assert (
+        await service.get_current_subscription(
+            actor=_platform(),
+            organization_id=unknown_organization_id,
+        )
+        is None
+    )
+    with pytest.raises(EntitlementNotFoundError, match="Subscription was not found"):
+        await service.suspend_subscription(
+            actor=_platform(),
+            organization_id=unknown_organization_id,
+        )
+    with pytest.raises(EntitlementNotFoundError):
+        await service.reactivate_subscription(
+            actor=_platform(),
+            organization_id=unknown_organization_id,
+        )
+    with pytest.raises(EntitlementNotFoundError):
+        await service.cancel_subscription(
+            actor=_platform(),
+            organization_id=unknown_organization_id,
+        )
+
+    assert audit.events == []
+    assert repository.subscriptions == []
+
+
+async def test_invalid_lifecycle_transition_leaves_no_intent_evidence() -> None:
+    organization_id = uuid4()
+    audit = FakeEntitlementAuditSink()
+    service, repository = _service(audit=audit)
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    repository.subscriptions.append(subscription)
+
+    with pytest.raises(InvalidEntitlementError, match="cannot be reactivated"):
+        await service.reactivate_subscription(
+            actor=_platform(),
+            organization_id=organization_id,
+        )
+
+    assert audit.events == []
+    assert repository.subscriptions == [subscription]
+
+
+async def test_subscription_lifecycle_aborts_when_audit_intent_fails() -> None:
+    organization_id = uuid4()
+    service, repository = _service(FakeEntitlementAuditSink(fail=True))
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    repository.subscriptions.append(subscription)
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await service.suspend_subscription(
+            actor=_platform(),
+            organization_id=organization_id,
+        )
+
+    assert repository.subscriptions == [subscription]
+
+
+async def test_stale_lifecycle_transition_is_rejected_after_intent() -> None:
+    organization_id = uuid4()
+    audit = FakeEntitlementAuditSink()
+    repository = RacingEntitlementRepository()
+    service = EntitlementService(
+        repository=repository,
+        organizations=FakeOrganizationAvailability(),
+        audit=audit,
+    )
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    repository.subscriptions.append(subscription)
+
+    with pytest.raises(EntitlementConflictError, match="changed during the transition"):
+        await service.suspend_subscription(
+            actor=_platform(),
+            organization_id=organization_id,
+        )
+
+    assert audit.events == [
+        ("subscription.suspension_requested", subscription.id, "intent_recorded"),
+    ]
+    assert [value.status for value in repository.subscriptions] == [
+        SubscriptionStatus.CANCELED
+    ]
+
+
+async def test_only_platform_authority_can_manage_subscription_lifecycle() -> None:
+    organization_id = uuid4()
+    audit = FakeEntitlementAuditSink()
+    service, repository = _service(audit=audit)
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    repository.subscriptions.append(subscription)
+    tenant = cast(
+        PlatformActorContext,
+        TenantActorContext(
+            subject_id=uuid4(),
+            organization_id=organization_id,
+            membership_id=uuid4(),
+            correlation_id="correlation-1",
+            permissions=frozenset({MANAGE_ENTITLEMENTS_PERMISSION}),
+        ),
+    )
+    unprivileged = PlatformActorContext(
+        subject_id=uuid4(),
+        correlation_id="correlation-1",
+        permissions=frozenset(),
+    )
+
+    for actor in (tenant, unprivileged):
+        with pytest.raises(AuthorizationError):
+            await service.get_current_subscription(
+                actor=actor,
+                organization_id=organization_id,
+            )
+        with pytest.raises(AuthorizationError):
+            await service.suspend_subscription(
+                actor=actor,
+                organization_id=organization_id,
+            )
+        with pytest.raises(AuthorizationError):
+            await service.reactivate_subscription(
+                actor=actor,
+                organization_id=organization_id,
+            )
+        with pytest.raises(AuthorizationError):
+            await service.cancel_subscription(
+                actor=actor,
+                organization_id=organization_id,
+            )
+
+    assert audit.events == []
+    assert repository.subscriptions == [subscription]
+
+
+async def test_subscription_lifecycle_routes_are_typed_and_csrf_protected() -> None:
+    organization_id = uuid4()
+    audit = FakeEntitlementAuditSink()
+    service, repository = _service(audit=audit)
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.TRIALING,
+    )
+    repository.subscriptions.append(subscription)
+    app, csrf = _application(service, actor=_platform())
+    base = f"/api/v1/platform/organizations/{organization_id}/subscription"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        current = await client.get(base)
+        missing = await client.get(
+            f"/api/v1/platform/organizations/{uuid4()}/subscription"
+        )
+        suspended = await client.post(f"{base}/suspend")
+        reactivated = await client.post(f"{base}/reactivate")
+        invalid = await client.post(f"{base}/reactivate")
+        canceled = await client.post(f"{base}/cancel")
+        terminal = await client.post(f"{base}/suspend")
+        gone = await client.post(
+            f"/api/v1/platform/organizations/{uuid4()}/subscription/cancel"
+        )
+
+    assert current.status_code == 200
+    assert current.json() == {
+        "id": str(subscription.id),
+        "organization_id": str(organization_id),
+        "plan_id": str(subscription.plan_id),
+        "status": "trialing",
+        "starts_at": subscription.starts_at.isoformat(),
+        "ends_at": None,
+    }
+    assert missing.status_code == 404
+    assert suspended.status_code == 200
+    assert suspended.json()["status"] == "suspended"
+    assert reactivated.status_code == 200
+    assert reactivated.json()["status"] == "active"
+    assert invalid.status_code == 422
+    assert canceled.status_code == 200
+    assert canceled.json()["id"] == str(subscription.id)
+    assert canceled.json()["status"] == "canceled"
+    assert terminal.status_code == 422
+    assert gone.status_code == 404
+    assert csrf.calls == 6
+    assert [event[0] for event in audit.events] == [
+        "subscription.suspension_requested",
+        "subscription.suspended",
+        "subscription.reactivation_requested",
+        "subscription.reactivated",
+        "subscription.cancellation_requested",
+        "subscription.canceled",
+    ]
+
+
+async def test_subscription_lifecycle_routes_reject_tenant_actors() -> None:
+    organization_id = uuid4()
+    audit = FakeEntitlementAuditSink()
+    service, repository = _service(audit=audit)
+    subscription = _subscription(
+        organization_id=organization_id,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    repository.subscriptions.append(subscription)
+    tenant = TenantActorContext(
+        subject_id=uuid4(),
+        organization_id=organization_id,
+        membership_id=uuid4(),
+        correlation_id="correlation-1",
+        permissions=frozenset({MANAGE_ENTITLEMENTS_PERMISSION}),
+    )
+    app, _ = _application(service, actor=tenant)
+    base = f"/api/v1/platform/organizations/{organization_id}/subscription"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        responses = (
+            await client.get(base),
+            await client.post(f"{base}/suspend"),
+            await client.post(f"{base}/reactivate"),
+            await client.post(f"{base}/cancel"),
+        )
+
+    assert [response.status_code for response in responses] == [403, 403, 403, 403]
+    assert audit.events == []
+    assert repository.subscriptions == [subscription]

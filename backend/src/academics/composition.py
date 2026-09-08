@@ -14,6 +14,7 @@ from academics.application.ports import CampusDirectory
 from academics.application.ports import CourseSelectionStudentOwnership
 from academics.application.reference_service import AcademicReferenceService
 from academics.application.service import AcademicAdministrationService
+from academics.application.service import AcademicEnrollmentTransitionService
 from academics.application.service import CourseSelectionService
 from academics.infrastructure.sqlalchemy_repository import SQLAlchemyAcademicRepository
 from academics.presentation.router import router
@@ -38,6 +39,7 @@ class AcademicServices:
     course_selection: CourseSelectionService
     references: AcademicReferenceService
     admissions_enrollment: AcceptedStudentAcademicEnrollmentService
+    enrollment_transitions: AcademicEnrollmentTransitionService
 
 
 def create_academic_services(
@@ -70,6 +72,10 @@ def create_academic_services(
             catalog=repository,
             registrations=repository,
         ),
+        enrollment_transitions=AcademicEnrollmentTransitionService(
+            catalog=repository,
+            audit=audit,
+        ),
     )
 
 
@@ -81,6 +87,7 @@ def install_academic_routes(
     """Register explicitly composed academic services and thin router."""
 
     app.state.academic_administration_service = services.administration
+    app.state.academic_enrollment_transition_service = services.enrollment_transitions
     app.state.course_selection_service = services.course_selection
     app.include_router(router)
 

@@ -43,6 +43,7 @@ from grading.domain.models import GradeTarget
 from grading.domain.models import GradingScale
 from grading.domain.models import GradingScaleTemplate
 from grading.domain.models import build_scale_from_template
+from grading.infrastructure.repository import InMemoryExternalGradeEvidenceDirectory
 from grading.infrastructure.repository import InMemoryGradeTargetDirectory
 from grading.infrastructure.sqlalchemy_repository import SQLAlchemyGradingRepository
 from grading.infrastructure.term_guard import SQLAlchemyTermGradeWriteGuard
@@ -89,6 +90,27 @@ class NoOpGradingAuditSink:
             correlation_id,
             after_term_closure,
             outcome,
+        )
+
+    async def record_external_evidence_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        evidence_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str | None,
+    ) -> None:
+        del (
+            action,
+            organization_id,
+            actor_subject_id,
+            evidence_id,
+            correlation_id,
+            outcome,
+            reason,
         )
 
 
@@ -383,6 +405,7 @@ async def _race_fixture(
         term_writes=SQLAlchemyTermGradeWriteGuard(database),
         clock=FixedClock(datetime(2026, 8, 7, 10, tzinfo=UTC)),
         audit=NoOpGradingAuditSink(),
+        evidence=InMemoryExternalGradeEvidenceDirectory(),
     )
     return GradingRaceFixture(
         organization_id=organization_id,

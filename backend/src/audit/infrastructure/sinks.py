@@ -213,6 +213,31 @@ class ApplicationAuditSink:
             reason=reason,
         )
 
+    async def record_enrollment_transition_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        """Record an enrollment transition intent or outcome without student data."""
+
+        await self._record(
+            organization_id=organization_id,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type=target_type,
+            entity_id=str(target_id),
+            correlation_id=correlation_id,
+            outcome=outcome,
+            reason=reason,
+        )
+
     async def record_moodle_configuration_event(
         self,
         *,
@@ -232,6 +257,74 @@ class ApplicationAuditSink:
             entity_id=str(organization_id),
             correlation_id=correlation_id,
             outcome=outcome,
+        )
+
+    async def record_grade_evidence_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID | None,
+        evidence_reference: str,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record grade-evidence intake or resolution without grade values."""
+
+        await self._record(
+            organization_id=organization_id,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type="moodle_grade_evidence",
+            entity_id=evidence_reference,
+            correlation_id=correlation_id,
+            outcome=outcome,
+        )
+
+    async def record_grade_reconciliation_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        run_id: UUID,
+        correlation_id: str,
+        outcome: str,
+    ) -> None:
+        """Record reconciliation intent or outcome without provider payloads."""
+
+        await self._record(
+            organization_id=organization_id,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type="moodle_grade_reconciliation",
+            entity_id=str(run_id),
+            correlation_id=correlation_id,
+            outcome=outcome,
+        )
+
+    async def record_external_evidence_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        evidence_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str | None,
+    ) -> None:
+        """Record official acceptance or rejection of external grade evidence."""
+
+        await self._record(
+            organization_id=organization_id,
+            actor_subject_id=actor_subject_id,
+            action=action,
+            entity_type="external_grade_evidence",
+            entity_id=str(evidence_id),
+            correlation_id=correlation_id,
+            outcome=outcome,
+            reason=reason,
         )
 
     async def record_admissions_decision_event(

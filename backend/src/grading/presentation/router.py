@@ -114,6 +114,32 @@ class FinalGradeRevisionBody(BaseModel):
     expected_revision_number: int = Field(ge=0)
 
 
+class ExternalEvidenceAcceptanceBody(BaseModel):
+    """Validate acceptance of pending external evidence as an official result."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grading_scale_id: UUID
+    explanation: str | None = Field(default=None, max_length=2000)
+
+
+class ExternalEvidenceRejectionBody(BaseModel):
+    """Validate an explicit reviewer rejection of pending external evidence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ExternalEvidenceRejectionResponse(BaseModel):
+    """Confirm that evidence was rejected without exposing grade values."""
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_id: UUID
+    status: str
+
+
 class FinalGradeResponse(BaseModel):
     """Serialize current official final-grade state explicitly."""
 
@@ -518,6 +544,51 @@ async def gpa_summary(
     return GpaSummaryResponse.from_domain(summary)
 
 
+@router.post(
+    "/external-evidence/{evidence_id}/accept",
+    response_model=FinalGradeResponse,
+)
+async def accept_external_evidence(
+    evidence_id: UUID,
+    body: ExternalEvidenceAcceptanceBody,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> FinalGradeResponse:
+    """Record or revise an official grade from pending external evidence."""
+
+    grade = await _grading_service(request).accept_external_evidence(
+        context=_tenant_actor(actor),
+        evidence_id=evidence_id,
+        grading_scale_id=body.grading_scale_id,
+        explanation=body.explanation,
+    )
+    return FinalGradeResponse.from_domain(grade)
+
+
+@router.post(
+    "/external-evidence/{evidence_id}/reject",
+    response_model=ExternalEvidenceRejectionResponse,
+)
+async def reject_external_evidence(
+    evidence_id: UUID,
+    body: ExternalEvidenceRejectionBody,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> ExternalEvidenceRejectionResponse:
+    """Decline pending external evidence with an audited reason."""
+
+    await _grading_service(request).reject_external_evidence(
+        context=_tenant_actor(actor),
+        evidence_id=evidence_id,
+        reason=body.reason,
+    )
+    return ExternalEvidenceRejectionResponse(evidence_id=evidence_id, status="rejected")
+
+
+cast(object, accept_external_evidence)
+cast(object, reject_external_evidence)
 cast(object, record_final_grade)
 cast(object, configure_scale)
 cast(object, revise_final_grade)
@@ -527,6 +598,9 @@ cast(object, transcript)
 cast(object, gpa_summary)
 
 __all__ = [
+    "ExternalEvidenceAcceptanceBody",
+    "ExternalEvidenceRejectionBody",
+    "ExternalEvidenceRejectionResponse",
     "FinalGradeCreateBody",
     "FinalGradeHistoryResponse",
     "FinalGradeResponse",

@@ -3,6 +3,7 @@
 from academics.domain.exceptions import AcademicRuleError
 from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
+from academics.domain.exceptions import EnrollmentTransitionError
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
@@ -54,6 +55,7 @@ __all__ = [
     "CurriculumCourseKind",
     "Department",
     "EducationMode",
+    "EnrollmentTransitionError",
     "Faculty",
     "MeetingWindow",
     "Program",

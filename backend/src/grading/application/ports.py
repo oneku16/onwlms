@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from grading.domain.models import ExternalGradeEvidence
 from grading.domain.models import FinalGrade
 from grading.domain.models import GradeRevision
 from grading.domain.models import GradeTarget
@@ -50,6 +51,15 @@ class GradingRepository(Protocol):
         """Return a final grade only from the requested tenant."""
         ...
 
+    async def get_final_grade_for_course_enrollment(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> FinalGrade | None:
+        """Return the current official grade of one tenant course enrollment."""
+        ...
+
     async def revise_final_grade(
         self,
         *,
@@ -89,6 +99,53 @@ class GradeTargetDirectory(Protocol):
         course_enrollment_id: UUID,
     ) -> GradeTarget | None:
         """Return grading facts only when the target belongs to the tenant."""
+        ...
+
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_person_id: UUID,
+    ) -> GradeTarget | None:
+        """Return the one active participation of a person in an offering."""
+        ...
+
+
+class ExternalGradeEvidenceDirectory(Protocol):
+    """Read and resolve pending external evidence owned by an integration."""
+
+    async def get_pending_evidence(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+    ) -> ExternalGradeEvidence | None:
+        """Return evidence only while it awaits an official decision."""
+        ...
+
+    async def record_acceptance(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+        final_grade_id: UUID,
+        actor_subject_id: UUID,
+        correlation_id: str,
+    ) -> None:
+        """Link the evidence to the official grade it produced."""
+        ...
+
+    async def record_rejection(
+        self,
+        *,
+        organization_id: UUID,
+        evidence_id: UUID,
+        reason_code: str,
+        actor_subject_id: UUID,
+        correlation_id: str,
+    ) -> None:
+        """Mark the evidence rejected without discarding it."""
         ...
 
 
@@ -143,8 +200,23 @@ class GradingAuditSink(Protocol):
         """Record one grade-mutation intent or outcome without grade values."""
         ...
 
+    async def record_external_evidence_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        evidence_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str | None,
+    ) -> None:
+        """Record official acceptance or rejection of external evidence."""
+        ...
+
 
 __all__ = [
+    "ExternalGradeEvidenceDirectory",
     "GradeTargetDirectory",
     "GradingAuditSink",
     "GradingClock",

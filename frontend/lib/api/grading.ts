@@ -1,9 +1,47 @@
 import {
+  asBoolean,
   asNumber,
   asRecord,
   asString,
   unwrapPayload,
+  type UnknownRecord,
 } from "@/lib/api/validation";
+
+export const gradingScaleKinds = [
+  "percentage",
+  "letter",
+  "ects",
+  "five_point",
+  "pass_fail",
+  "custom",
+] as const;
+
+export type GradingScaleKind = (typeof gradingScaleKinds)[number];
+
+export const gradingScaleTemplates = [
+  "percentage",
+  "ects",
+  "five_point",
+  "pass_fail",
+] as const;
+
+export type GradingScaleTemplate = (typeof gradingScaleTemplates)[number];
+
+export interface GradeBandView {
+  readonly minimumScore: string;
+  readonly symbol: string;
+  readonly passing: boolean;
+  readonly gradePoints: string | null;
+}
+
+export interface GradingScaleView {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: GradingScaleKind;
+  readonly minimumScore: string;
+  readonly maximumScore: string;
+  readonly bands: readonly GradeBandView[];
+}
 
 export interface AcademicEnrollmentChoice {
   readonly id: string;
@@ -52,6 +90,62 @@ export function parseAcademicEnrollmentChoices(
     }
     return { id, studentId, programId, status };
   });
+}
+
+function isGradingScaleKind(value: string): value is GradingScaleKind {
+  return gradingScaleKinds.some((kind) => kind === value);
+}
+
+function requireScaleString(record: UnknownRecord, key: string): string {
+  const value = asString(record[key]);
+  if (!value) {
+    throw new Error("The grading scale response is not supported.");
+  }
+  return value;
+}
+
+function parseGradeBand(value: unknown): GradeBandView {
+  const record = asRecord(value);
+  const passing = asBoolean(record?.passing);
+  if (!record || passing === undefined) {
+    throw new Error("The grading scale response is not supported.");
+  }
+  const gradePoints =
+    record.grade_points === null || record.grade_points === undefined
+      ? null
+      : requireScaleString(record, "grade_points");
+  return {
+    minimumScore: requireScaleString(record, "minimum_score"),
+    symbol: requireScaleString(record, "symbol"),
+    passing,
+    gradePoints,
+  };
+}
+
+/** Parse an official grading scale; scores stay decimal strings from the backend. */
+export function parseGradingScale(value: unknown): GradingScaleView {
+  const record = asRecord(unwrapPayload(value));
+  if (!record || !Array.isArray(record.bands) || record.bands.length === 0) {
+    throw new Error("The grading scale response is not supported.");
+  }
+  const kind = requireScaleString(record, "kind");
+  if (!isGradingScaleKind(kind)) {
+    throw new Error("The grading scale response is not supported.");
+  }
+  return {
+    id: requireScaleString(record, "id"),
+    name: requireScaleString(record, "name"),
+    kind,
+    minimumScore: requireScaleString(record, "minimum_score"),
+    maximumScore: requireScaleString(record, "maximum_score"),
+    bands: record.bands.map(parseGradeBand),
+  };
+}
+
+export function parseGradingScales(
+  value: unknown,
+): readonly GradingScaleView[] {
+  return requireArray(value, "grading scale").map(parseGradingScale);
 }
 
 export function parseGradingScaleChoices(

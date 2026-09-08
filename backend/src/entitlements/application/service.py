@@ -1,5 +1,6 @@
 """Centralized permission-aware feature entitlement application service."""
 
+from collections.abc import Callable
 from datetime import datetime
 from uuid import UUID
 
@@ -182,6 +183,109 @@ class EntitlementService:
             organization_id=organization_id,
         )
         return subscription
+
+    async def get_current_subscription(
+        self,
+        *,
+        actor: PlatformActorContext,
+        organization_id: UUID,
+    ) -> Subscription | None:
+        """Return one organization's current subscription through platform authority."""
+
+        self._require_platform_permission(actor)
+        return await self._repository.get_current_subscription(
+            organization_id=organization_id,
+        )
+
+    async def suspend_subscription(
+        self,
+        *,
+        actor: PlatformActorContext,
+        organization_id: UUID,
+    ) -> Subscription:
+        """Suspend one organization's active or trialing subscription."""
+
+        return await self._transition_subscription(
+            actor=actor,
+            organization_id=organization_id,
+            transition=Subscription.suspend,
+            requested_action="subscription.suspension_requested",
+            completed_action="subscription.suspended",
+        )
+
+    async def reactivate_subscription(
+        self,
+        *,
+        actor: PlatformActorContext,
+        organization_id: UUID,
+    ) -> Subscription:
+        """Return one organization's suspended subscription to active service."""
+
+        return await self._transition_subscription(
+            actor=actor,
+            organization_id=organization_id,
+            transition=Subscription.reactivate,
+            requested_action="subscription.reactivation_requested",
+            completed_action="subscription.reactivated",
+        )
+
+    async def cancel_subscription(
+        self,
+        *,
+        actor: PlatformActorContext,
+        organization_id: UUID,
+    ) -> Subscription:
+        """Cancel one organization's subscription; cancellation is terminal."""
+
+        return await self._transition_subscription(
+            actor=actor,
+            organization_id=organization_id,
+            transition=Subscription.cancel,
+            requested_action="subscription.cancellation_requested",
+            completed_action="subscription.canceled",
+        )
+
+    async def _transition_subscription(
+        self,
+        *,
+        actor: PlatformActorContext,
+        organization_id: UUID,
+        transition: Callable[[Subscription], Subscription],
+        requested_action: str,
+        completed_action: str,
+    ) -> Subscription:
+        """Apply one audited lifecycle transition to the current subscription.
+
+        The domain rule runs before intent is recorded so an impossible request
+        leaves no intent evidence, and the repository re-checks the locked
+        status so a concurrent transition cannot be silently overwritten.
+        """
+
+        self._require_platform_permission(actor)
+        current = await self._repository.get_current_subscription(
+            organization_id=organization_id,
+        )
+        if current is None:
+            raise EntitlementNotFoundError("Subscription was not found")
+        transitioned = transition(current)
+        await self._audit_change(
+            action=requested_action,
+            actor=actor,
+            target_id=current.id,
+            organization_id=organization_id,
+            outcome="intent_recorded",
+        )
+        await self._repository.update_subscription(
+            transitioned,
+            expected_status=current.status,
+        )
+        await self._audit_change(
+            action=completed_action,
+            actor=actor,
+            target_id=transitioned.id,
+            organization_id=organization_id,
+        )
+        return transitioned
 
     async def set_override(
         self,
