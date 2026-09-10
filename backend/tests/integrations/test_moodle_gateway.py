@@ -68,3 +68,53 @@ async def test_deadline_query_uses_mapped_user_enrollments_before_assignments() 
     assert values[0].title == "Essay"
     assert values[0].due_at == datetime.fromtimestamp(1_786_003_200, UTC)
     assert values[0].source_version == "moodle-webservice-v1"
+
+
+async def test_course_grade_query_translates_graded_course_totals_only() -> None:
+    def handle(request: Request) -> Response:
+        parameters = parse_qs(request.content.decode("utf-8"))
+        assert parameters["wsfunction"] == ["gradereport_user_get_grade_items"]
+        assert parameters["courseid"] == ["11"]
+        return Response(
+            200,
+            json={
+                "usergrades": [
+                    {
+                        "userid": 7,
+                        "gradeitems": [
+                            {"id": 1, "itemtype": "mod", "graderaw": 50},
+                            {
+                                "id": 2,
+                                "itemtype": "course",
+                                "graderaw": 87.5,
+                                "gradedategraded": 1_786_003_200,
+                            },
+                        ],
+                    },
+                    {
+                        "userid": 8,
+                        "gradeitems": [
+                            {"id": 2, "itemtype": "course", "graderaw": None},
+                        ],
+                    },
+                    {"userid": "bad", "gradeitems": []},
+                    "malformed",
+                ]
+            },
+        )
+
+    async with AsyncClient(transport=MockTransport(handle)) as client:
+        gateway = MoodleWebServiceGateway(
+            base_url="https://moodle.example",
+            token="protected-token",
+            timeout_seconds=2,
+            http_client=client,
+        )
+        values = await gateway.list_course_grades(external_course_id="11")
+
+    assert len(values) == 1
+    assert values[0].external_user_id == "7"
+    assert values[0].grade_item_id == "2"
+    assert values[0].grade_raw == "87.5"
+    assert values[0].graded_at == datetime.fromtimestamp(1_786_003_200, UTC)
+    assert values[0].source_version == "moodle-webservice-v1"

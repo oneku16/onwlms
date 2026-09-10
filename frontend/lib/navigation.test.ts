@@ -48,6 +48,82 @@ describe("permission- and entitlement-aware navigation", () => {
     expect(visibleHrefs(withEntitlement)).toContain("/student/moodle");
   });
 
+  it("separates structure, curriculum, enrollment, and admissions-policy tools by permission", () => {
+    const structureManager = session({
+      roles: ["OrganizationAdmin"],
+      permissions: ["academics.structure.manage"],
+    });
+    const curriculumManager = session({
+      roles: ["OrganizationAdmin"],
+      permissions: ["academics.curriculum.manage"],
+    });
+    const enrollmentManager = session({
+      roles: ["OrganizationAdmin"],
+      permissions: ["academics.enrollment.manage"],
+    });
+    const admissionsReviewer = session({
+      roles: ["OrganizationAdmin"],
+      permissions: ["admissions.review"],
+    });
+    const admissionsPolicyManager = session({
+      roles: ["OrganizationAdmin"],
+      permissions: ["admissions.policy.manage"],
+    });
+
+    expect(visibleHrefs(structureManager)).toEqual(
+      expect.arrayContaining([
+        "/organization/academic-years",
+        "/organization/course-offerings",
+        "/organization/teacher-assignments",
+        "/workspace/academics",
+      ]),
+    );
+    expect(visibleHrefs(structureManager)).not.toContain(
+      "/organization/curricula",
+    );
+    expect(visibleHrefs(curriculumManager)).toEqual(
+      expect.arrayContaining([
+        "/organization/curricula",
+        "/organization/course-selection-policies",
+      ]),
+    );
+    expect(visibleHrefs(curriculumManager)).not.toContain(
+      "/organization/academic-years",
+    );
+    expect(visibleHrefs(enrollmentManager)).toContain(
+      "/organization/student-enrollments",
+    );
+    expect(visibleHrefs(admissionsReviewer)).toContain(
+      "/organization/admissions",
+    );
+    expect(visibleHrefs(admissionsReviewer)).not.toContain(
+      "/organization/admissions-policies",
+    );
+    expect(visibleHrefs(admissionsPolicyManager)).toContain(
+      "/organization/admissions-policies",
+    );
+  });
+
+  it("shows the platform feature catalog only to entitlement managers", () => {
+    const entitlementManager = session({
+      activeOrganization: null,
+      roles: ["PlatformAdmin"],
+      permissions: ["entitlements.platform.manage"],
+    });
+    const otherPlatformAdmin = session({
+      activeOrganization: null,
+      roles: ["PlatformAdmin"],
+      permissions: ["organizations.platform.lifecycle"],
+    });
+
+    expect(visibleHrefs(entitlementManager)).toEqual(
+      expect.arrayContaining(["/platform/plans", "/platform/features"]),
+    );
+    expect(visibleHrefs(otherPlatformAdmin)).not.toContain(
+      "/platform/features",
+    );
+  });
+
   it("offers grade amendment to permitted tenant administrators, not teachers", () => {
     const administrator = session({ roles: ["OrganizationAdmin"] });
     const reviser = session({

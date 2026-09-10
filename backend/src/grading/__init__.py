@@ -5,11 +5,13 @@ from grading.application import GRADING_FINAL_RECORD
 from grading.application import GRADING_FINAL_REVISE
 from grading.application import GRADING_SCALE_MANAGE
 from grading.application import GRADING_TRANSCRIPT_READ
+from grading.application import ExternalGradeEvidenceDirectory
 from grading.application import GradeTargetDirectory
 from grading.application import GradingRepository
 from grading.application import OfficialGradingService
 from grading.application import TermClosureDirectory
 from grading.application import TermGradeWriteGuard
+from grading.domain import ExternalGradeEvidence
 from grading.domain import FinalGrade
 from grading.domain import FinalGradeHistory
 from grading.domain import GpaSummary
@@ -25,6 +27,8 @@ __all__ = [
     "GRADING_FINAL_REVISE",
     "GRADING_SCALE_MANAGE",
     "GRADING_TRANSCRIPT_READ",
+    "ExternalGradeEvidence",
+    "ExternalGradeEvidenceDirectory",
     "FinalGrade",
     "FinalGradeHistory",
     "GpaSummary",

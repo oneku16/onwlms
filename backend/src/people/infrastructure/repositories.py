@@ -289,6 +289,26 @@ class SQLAlchemyPeopleRepository:
             kind=ProfileKind.STUDENT,
         )
 
+    async def resolve_student_profile_id(
+        self,
+        *,
+        organization_id: UUID,
+        person_id: UUID,
+    ) -> UUID | None:
+        """Return the tenant person's student profile ID without decrypting data."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            value: object = await session.scalar(
+                select(PersonProfileModel.id).where(
+                    PersonProfileModel.organization_id == organization_id,
+                    PersonProfileModel.person_id == person_id,
+                    PersonProfileModel.kind == ProfileKind.STUDENT.value,
+                )
+            )
+            return value if isinstance(value, UUID) else None
+
     async def _existing_profile_ids(
         self,
         *,

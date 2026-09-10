@@ -21,10 +21,13 @@ from academics.application.contracts import AcademicGradeTarget
 from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
+from academics.application.ports import CourseEnrollmentTransitionTransaction
 from academics.application.ports import CourseSelectionDecisionTransaction
 from academics.application.ports import CourseSelectionSubmissionTransaction
+from academics.application.ports import StudentEnrollmentTransitionTransaction
 from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
+from academics.domain.exceptions import EnrollmentTransitionError
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
@@ -1454,6 +1457,137 @@ class SQLAlchemyAcademicRepository:
             for model in models
         )
 
+    async def get_course_enrollment(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> CourseEnrollment | None:
+        """Return an official course enrollment only from the requested tenant."""
+
+        return await self._get(
+            organization_id=organization_id,
+            statement=select(CourseEnrollmentModel).where(
+                CourseEnrollmentModel.organization_id == organization_id,
+                CourseEnrollmentModel.id == course_enrollment_id,
+            ),
+            mapper=self._course_enrollment_from_model,
+        )
+
+    async def list_course_enrollments_page(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID | None,
+        course_offering_id: UUID | None,
+        status: CourseEnrollmentStatus | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Return a bounded newest-first course-enrollment page for one tenant."""
+
+        statement = select(CourseEnrollmentModel).where(
+            CourseEnrollmentModel.organization_id == organization_id
+        )
+        if student_academic_enrollment_id is not None:
+            statement = statement.where(
+                CourseEnrollmentModel.student_academic_enrollment_id
+                == student_academic_enrollment_id
+            )
+        if course_offering_id is not None:
+            statement = statement.where(
+                CourseEnrollmentModel.course_offering_id == course_offering_id
+            )
+        if status is not None:
+            statement = statement.where(CourseEnrollmentModel.status == status.value)
+        async with self._database.session(organization_id=organization_id) as session:
+            models = tuple(
+                (
+                    await session.scalars(
+                        statement.order_by(
+                            CourseEnrollmentModel.enrolled_at.desc(),
+                            CourseEnrollmentModel.id,
+                        )
+                        .limit(limit)
+                        .offset(offset)
+                    )
+                ).all()
+            )
+        return tuple(self._course_enrollment_from_model(model) for model in models)
+
+    @asynccontextmanager
+    async def student_enrollment_transition(
+        self,
+        *,
+        organization_id: UUID,
+        enrollment_id: UUID,
+    ) -> AsyncIterator[StudentEnrollmentTransitionTransaction]:
+        """Lock one academic enrollment row through transition evaluation and save."""
+
+        async with self._database.session(organization_id=organization_id) as session:
+            model = await session.scalar(
+                select(StudentAcademicEnrollmentModel)
+                .where(
+                    StudentAcademicEnrollmentModel.organization_id == organization_id,
+                    StudentAcademicEnrollmentModel.id == enrollment_id,
+                )
+                .with_for_update()
+            )
+            if model is None:
+                raise NotFoundError("Student academic enrollment was not found.")
+            yield _SQLAlchemyStudentEnrollmentTransition(
+                repository=self,
+                session=session,
+                model=model,
+            )
+
+    @asynccontextmanager
+    async def course_enrollment_transition(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> AsyncIterator[CourseEnrollmentTransitionTransaction]:
+        """Lock one course enrollment row and its term state through one transition."""
+
+        async with self._database.session(organization_id=organization_id) as session:
+            model = await session.scalar(
+                select(CourseEnrollmentModel)
+                .where(
+                    CourseEnrollmentModel.organization_id == organization_id,
+                    CourseEnrollmentModel.id == course_enrollment_id,
+                )
+                .with_for_update()
+            )
+            if model is None:
+                raise NotFoundError("Course enrollment was not found.")
+            offering = await session.scalar(
+                select(CourseOfferingModel).where(
+                    CourseOfferingModel.organization_id == organization_id,
+                    CourseOfferingModel.id == model.course_offering_id,
+                )
+            )
+            term_model = None
+            if offering is not None:
+                # A share lock serializes this transition against close_term's
+                # exclusive term lock so closure cannot change before commit.
+                term_model = await session.scalar(
+                    select(TermModel)
+                    .where(
+                        TermModel.organization_id == organization_id,
+                        TermModel.id == offering.term_id,
+                    )
+                    .with_for_update(read=True)
+                )
+            if term_model is None:
+                raise NotFoundError("Course enrollment term was not found.")
+            yield _SQLAlchemyCourseEnrollmentTransition(
+                session=session,
+                model=model,
+                course_enrollment=self._course_enrollment_from_model(model),
+                term=self._term_from_model(term_model),
+            )
+
     async def admissions_target_exists(
         self,
         *,
@@ -1577,6 +1711,118 @@ class SQLAlchemyAcademicRepository:
                 term_id=term.id,
                 credits=enrollment.credits,
             )
+
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_profile_id: UUID,
+    ) -> AcademicGradeTarget | None:
+        """Resolve grading facts for one student profile in one offering.
+
+        Two gradable participations of the same student in one offering are
+        ambiguous and resolve to None rather than a guess.
+        """
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            student_enrollment_ids = frozenset(
+                await session.scalars(
+                    select(StudentAcademicEnrollmentModel.id).where(
+                        StudentAcademicEnrollmentModel.organization_id
+                        == organization_id,
+                        StudentAcademicEnrollmentModel.student_id == student_profile_id,
+                        StudentAcademicEnrollmentModel.status
+                        == AcademicEnrollmentStatus.ACTIVE.value,
+                    )
+                )
+            )
+            if not student_enrollment_ids:
+                return None
+            enrollments = (
+                await session.scalars(
+                    select(CourseEnrollmentModel)
+                    .where(
+                        CourseEnrollmentModel.organization_id == organization_id,
+                        CourseEnrollmentModel.course_offering_id == course_offering_id,
+                        CourseEnrollmentModel.student_academic_enrollment_id.in_(
+                            student_enrollment_ids
+                        ),
+                        CourseEnrollmentModel.status.in_(
+                            [
+                                CourseEnrollmentStatus.ENROLLED.value,
+                                CourseEnrollmentStatus.COMPLETED.value,
+                            ]
+                        ),
+                    )
+                    .limit(2)
+                )
+            ).all()
+            if len(enrollments) != 1:
+                return None
+            enrollment = enrollments[0]
+            offering = await session.scalar(
+                select(CourseOfferingModel).where(
+                    CourseOfferingModel.organization_id == organization_id,
+                    CourseOfferingModel.id == enrollment.course_offering_id,
+                )
+            )
+            if offering is None:
+                return None
+            course = await session.scalar(
+                select(CourseModel).where(
+                    CourseModel.organization_id == organization_id,
+                    CourseModel.id == offering.course_id,
+                )
+            )
+            term = await session.scalar(
+                select(TermModel).where(
+                    TermModel.organization_id == organization_id,
+                    TermModel.id == offering.term_id,
+                )
+            )
+            if course is None or term is None:
+                return None
+            return AcademicGradeTarget(
+                organization_id=organization_id,
+                student_academic_enrollment_id=(
+                    enrollment.student_academic_enrollment_id
+                ),
+                course_enrollment_id=enrollment.id,
+                course_offering_id=offering.id,
+                course_id=course.id,
+                term_id=term.id,
+                credits=enrollment.credits,
+            )
+
+    async def list_course_offering_ids_for_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> frozenset[UUID] | None:
+        """Return offerings of one tenant term, or None for an unknown term."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            term_exists = await session.scalar(
+                select(TermModel.id).where(
+                    TermModel.organization_id == organization_id,
+                    TermModel.id == term_id,
+                )
+            )
+            if term_exists is None:
+                return None
+            identifiers = await session.scalars(
+                select(CourseOfferingModel.id).where(
+                    CourseOfferingModel.organization_id == organization_id,
+                    CourseOfferingModel.term_id == term_id,
+                )
+            )
+            return frozenset(identifiers)
 
     async def get_term_closure(
         self,
@@ -2256,6 +2502,21 @@ class SQLAlchemyAcademicRepository:
         )
 
     @staticmethod
+    def _term_from_model(model: TermModel) -> Term:
+        """Translate a stored instructional term."""
+
+        return Term(
+            id=model.id,
+            organization_id=model.organization_id,
+            academic_year_id=model.academic_year_id,
+            name=model.name,
+            starts_on=model.starts_on,
+            ends_on=model.ends_on,
+            enrollment_deadline=model.enrollment_deadline,
+            is_closed=model.is_closed,
+        )
+
+    @staticmethod
     def _student_enrollment_from_model(
         model: StudentAcademicEnrollmentModel,
     ) -> StudentAcademicEnrollment:
@@ -2641,6 +2902,135 @@ class _SQLAlchemyCourseSelectionTransaction:
             raise CourseSelectionDecisionError(
                 "Course-selection student enrollment changed during mutation."
             )
+
+
+class _SQLAlchemyStudentEnrollmentTransition:
+    """Persist one academic enrollment transition while its row lock is held."""
+
+    def __init__(
+        self,
+        *,
+        repository: SQLAlchemyAcademicRepository,
+        session: AsyncSession,
+        model: StudentAcademicEnrollmentModel,
+    ) -> None:
+        self._repository = repository
+        self._session = session
+        self._model = model
+        self._student_enrollment = repository._student_enrollment_from_model(model)
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the academic enrollment protected by an exclusive row lock."""
+
+        return self._student_enrollment
+
+    async def list_course_enrollments(self) -> tuple[CourseEnrollment, ...]:
+        """Lock and read every course enrollment of the locked academic enrollment."""
+
+        models = tuple(
+            (
+                await self._session.scalars(
+                    select(CourseEnrollmentModel)
+                    .where(
+                        CourseEnrollmentModel.organization_id
+                        == self._model.organization_id,
+                        CourseEnrollmentModel.student_academic_enrollment_id
+                        == self._model.id,
+                    )
+                    .order_by(CourseEnrollmentModel.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        return tuple(
+            self._repository._course_enrollment_from_model(model) for model in models
+        )
+
+    async def save_transition(
+        self,
+        *,
+        enrollment: StudentAcademicEnrollment,
+        course_enrollments: tuple[CourseEnrollment, ...],
+    ) -> None:
+        """Apply lifecycle states to the locked rows inside the active transaction."""
+
+        if (
+            enrollment.organization_id != self._model.organization_id
+            or enrollment.id != self._model.id
+        ):
+            raise EnrollmentTransitionError(
+                "Academic enrollment changed during the transition."
+            )
+        self._model.status = enrollment.status.value
+        for course_enrollment in course_enrollments:
+            if (
+                course_enrollment.organization_id != enrollment.organization_id
+                or course_enrollment.student_academic_enrollment_id != enrollment.id
+            ):
+                raise EnrollmentTransitionError(
+                    "Course enrollment does not belong to the locked enrollment."
+                )
+            course_model = await self._session.scalar(
+                select(CourseEnrollmentModel)
+                .where(
+                    CourseEnrollmentModel.organization_id == enrollment.organization_id,
+                    CourseEnrollmentModel.id == course_enrollment.id,
+                    CourseEnrollmentModel.student_academic_enrollment_id
+                    == enrollment.id,
+                )
+                .with_for_update()
+            )
+            if course_model is None:
+                raise NotFoundError("Course enrollment was not found.")
+            course_model.status = course_enrollment.status.value
+        await self._session.flush()
+
+
+class _SQLAlchemyCourseEnrollmentTransition:
+    """Persist one course enrollment transition while its row lock is held."""
+
+    def __init__(
+        self,
+        *,
+        session: AsyncSession,
+        model: CourseEnrollmentModel,
+        course_enrollment: CourseEnrollment,
+        term: Term,
+    ) -> None:
+        self._session = session
+        self._model = model
+        self._course_enrollment = course_enrollment
+        self._term = term
+
+    @property
+    def course_enrollment(self) -> CourseEnrollment:
+        """Return the course enrollment protected by an exclusive row lock."""
+
+        return self._course_enrollment
+
+    @property
+    def term(self) -> Term:
+        """Return the offering term whose closure state is share-locked."""
+
+        return self._term
+
+    async def save_transition(
+        self,
+        *,
+        course_enrollment: CourseEnrollment,
+    ) -> None:
+        """Apply the lifecycle state to the locked row inside the transaction."""
+
+        if (
+            course_enrollment.organization_id != self._model.organization_id
+            or course_enrollment.id != self._model.id
+        ):
+            raise EnrollmentTransitionError(
+                "Course enrollment changed during the transition."
+            )
+        self._model.status = course_enrollment.status.value
+        await self._session.flush()
 
 
 __all__ = ["SQLAlchemyAcademicRepository"]

@@ -182,6 +182,31 @@ export function parseCreatedResource(value: unknown): ResourceSummary {
   return resource;
 }
 
+export function appendResource(
+  collection: ResourceCollection,
+  resource: ResourceSummary,
+): ResourceCollection {
+  return {
+    items: [...collection.items, resource],
+    total: collection.total === null ? null : collection.total + 1,
+  };
+}
+
+export function resourceLabel(resource: ResourceSummary): string {
+  return resource.code && resource.code !== resource.title
+    ? `${resource.code} · ${resource.title}`
+    : resource.title;
+}
+
+export function resourceTitle(
+  resources: readonly ResourceSummary[],
+  id: string,
+  fallback: string,
+): string {
+  const resource = resources.find((candidate) => candidate.id === id);
+  return resource ? resourceLabel(resource) : `${fallback} ${id.slice(0, 8)}`;
+}
+
 export function parseGuardianGradeCollection(
   value: unknown,
 ): ResourceCollection {

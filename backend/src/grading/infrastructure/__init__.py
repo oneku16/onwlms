@@ -4,6 +4,7 @@ from grading.infrastructure.models import FinalGradeModel
 from grading.infrastructure.models import GradeBandModel
 from grading.infrastructure.models import GradeRevisionModel
 from grading.infrastructure.models import GradingScaleModel
+from grading.infrastructure.repository import InMemoryExternalGradeEvidenceDirectory
 from grading.infrastructure.repository import InMemoryGradeTargetDirectory
 from grading.infrastructure.repository import InMemoryGradingRepository
 from grading.infrastructure.repository import InMemoryTermClosureDirectory
@@ -16,6 +17,7 @@ __all__ = [
     "GradeBandModel",
     "GradeRevisionModel",
     "GradingScaleModel",
+    "InMemoryExternalGradeEvidenceDirectory",
     "InMemoryGradeTargetDirectory",
     "InMemoryGradingRepository",
     "InMemoryTermClosureDirectory",

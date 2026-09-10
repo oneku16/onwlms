@@ -16,8 +16,13 @@ class CourseSelectionDecisionError(ConflictError):
     """Raised when a selection request cannot accept the requested decision."""
 
 
+class EnrollmentTransitionError(ConflictError):
+    """Raised when current state forbids a requested one-way enrollment transition."""
+
+
 __all__ = [
     "AcademicRuleError",
     "CourseSelectionDecisionError",
     "CourseSelectionError",
+    "EnrollmentTransitionError",
 ]

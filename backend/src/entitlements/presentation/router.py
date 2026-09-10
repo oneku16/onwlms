@@ -19,6 +19,7 @@ from core.context import TenantActorContext
 from core.errors import AuthorizationError
 from core.time import utc_now
 from entitlements.application.service import EntitlementService
+from entitlements.domain.exceptions import EntitlementNotFoundError
 from entitlements.domain.models import EntitlementOverride
 from entitlements.domain.models import Feature
 from entitlements.domain.models import FeatureCode
@@ -116,6 +117,17 @@ class PlanResponse(BaseModel):
     display_name: str
     active: bool
     grants: list[PlanGrantResponse]
+
+
+class SubscriptionResponse(BaseModel):
+    """Expose one organization's current subscription lifecycle state."""
+
+    id: UUID
+    organization_id: UUID
+    plan_id: UUID
+    status: SubscriptionStatus
+    starts_at: datetime
+    ends_at: datetime | None
 
 
 def _service(request: Request) -> EntitlementService:
@@ -355,6 +367,83 @@ async def assign_subscription(
     return JSONResponse(serialize_subscription(subscription))
 
 
+@router.get(
+    "/platform/organizations/{organization_id}/subscription",
+    response_model=SubscriptionResponse,
+)
+async def get_subscription(
+    organization_id: UUID,
+    request: Request,
+    actor: ActorDep,
+) -> JSONResponse:
+    """Return one organization's current subscription through platform policy."""
+
+    subscription = await _service(request).get_current_subscription(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+    )
+    if subscription is None:
+        raise EntitlementNotFoundError("Subscription was not found")
+    return JSONResponse(serialize_subscription(subscription))
+
+
+@router.post(
+    "/platform/organizations/{organization_id}/subscription/suspend",
+    response_model=SubscriptionResponse,
+)
+async def suspend_subscription(
+    organization_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Suspend one organization's current subscription through platform policy."""
+
+    subscription = await _service(request).suspend_subscription(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+    )
+    return JSONResponse(serialize_subscription(subscription))
+
+
+@router.post(
+    "/platform/organizations/{organization_id}/subscription/reactivate",
+    response_model=SubscriptionResponse,
+)
+async def reactivate_subscription(
+    organization_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Reactivate one organization's suspended subscription through platform policy."""
+
+    subscription = await _service(request).reactivate_subscription(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+    )
+    return JSONResponse(serialize_subscription(subscription))
+
+
+@router.post(
+    "/platform/organizations/{organization_id}/subscription/cancel",
+    response_model=SubscriptionResponse,
+)
+async def cancel_subscription(
+    organization_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    _csrf: CSRFDep,
+) -> JSONResponse:
+    """Cancel one organization's current subscription through platform policy."""
+
+    subscription = await _service(request).cancel_subscription(
+        actor=_platform_actor(actor),
+        organization_id=organization_id,
+    )
+    return JSONResponse(serialize_subscription(subscription))
+
+
 @router.put("/platform/organizations/{organization_id}/entitlements")
 async def set_override(
     organization_id: UUID,
@@ -393,6 +482,7 @@ async def resolve_entitlement(
 
 
 __all__ = [
+    "SubscriptionResponse",
     "router",
     "serialize_feature",
     "serialize_override",

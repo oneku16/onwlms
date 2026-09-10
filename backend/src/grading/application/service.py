@@ -8,6 +8,7 @@ from core.context import TenantActorContext
 from core.errors import AuthorizationError
 from core.errors import NotFoundError
 from core.identifiers import new_uuid7
+from grading.application.ports import ExternalGradeEvidenceDirectory
 from grading.application.ports import GradeTargetDirectory
 from grading.application.ports import GradingAuditSink
 from grading.application.ports import GradingClock
@@ -20,11 +21,13 @@ from grading.domain.models import FinalGrade
 from grading.domain.models import FinalGradeHistory
 from grading.domain.models import GpaSummary
 from grading.domain.models import GradeRevision
+from grading.domain.models import GradeTarget
 from grading.domain.models import GradingScale
 from grading.domain.models import GradingScaleTemplate
 from grading.domain.models import TranscriptRecord
 from grading.domain.models import build_scale_from_template
 from grading.domain.models import calculate_gpa_summary
+from grading.domain.models import parse_external_score
 from grading.domain.models import transcript_record
 
 GRADING_SCALE_MANAGE = "grading.scale.manage"
@@ -33,6 +36,7 @@ GRADING_FINAL_REVISE = "grading.final_grade.revise"
 GRADING_CLOSED_TERM_REVISE = "grading.final_grade.revise_closed_term"
 GRADING_TRANSCRIPT_READ = "grading.transcript.read"
 MAX_GRADING_ADMIN_PAGE_SIZE = 100
+EXTERNAL_EVIDENCE_REJECTED_REASON_CODE = "rejected_by_reviewer"
 
 
 class OfficialGradingService:
@@ -47,6 +51,7 @@ class OfficialGradingService:
         term_writes: TermGradeWriteGuard,
         clock: GradingClock,
         audit: GradingAuditSink,
+        evidence: ExternalGradeEvidenceDirectory,
     ) -> None:
         self._repository = repository
         self._targets = targets
@@ -54,6 +59,7 @@ class OfficialGradingService:
         self._term_writes = term_writes
         self._clock = clock
         self._audit = audit
+        self._evidence = evidence
 
     async def configure_scale(
         self,
@@ -142,6 +148,264 @@ class OfficialGradingService:
         )
         if target is None:
             raise NotFoundError("Course enrollment was not found for grading.")
+        return await self._record_final_grade(
+            context=context,
+            target=target,
+            grading_scale_id=grading_scale_id,
+            raw_score=raw_score,
+            explanation=explanation,
+        )
+
+    async def revise_final_grade(
+        self,
+        *,
+        context: TenantActorContext,
+        final_grade_id: UUID,
+        raw_score: Decimal,
+        explanation: str,
+        grading_scale_id: UUID | None = None,
+        expected_revision_number: int | None = None,
+    ) -> FinalGrade:
+        """Amend an official grade while atomically preserving previous state."""
+
+        _authorize(context, GRADING_FINAL_REVISE)
+        if not explanation.strip():
+            raise GradingRuleError("Grade revision explanation is required.")
+        current = await self._repository.get_final_grade(
+            organization_id=context.organization_id,
+            final_grade_id=final_grade_id,
+        )
+        if current is None:
+            raise NotFoundError("Final grade was not found.")
+        if (
+            expected_revision_number is not None
+            and current.revision_number != expected_revision_number
+        ):
+            raise GradeRevisionConflictError(
+                "Final grade revision does not match the requested version."
+            )
+        return await self._revise_final_grade(
+            context=context,
+            current=current,
+            raw_score=raw_score,
+            explanation=explanation,
+            grading_scale_id=grading_scale_id,
+        )
+
+    async def accept_external_evidence(
+        self,
+        *,
+        context: TenantActorContext,
+        evidence_id: UUID,
+        grading_scale_id: UUID,
+        explanation: str | None = None,
+    ) -> FinalGrade:
+        """Turn pending external evidence into an official grade decision.
+
+        Acceptance is an ordinary authorized grade mutation. It records an
+        initial grade when the participation has none, or revises the current
+        grade, under the same permission, closure, and explanation rules that
+        govern manual recording. Evidence never writes a grade by itself.
+        """
+
+        _authorize(context, GRADING_FINAL_RECORD)
+        evidence = await self._evidence.get_pending_evidence(
+            organization_id=context.organization_id,
+            evidence_id=evidence_id,
+        )
+        if evidence is None:
+            raise NotFoundError("Pending external grade evidence was not found.")
+        target = await self._targets.get_grade_target_for_participant(
+            organization_id=context.organization_id,
+            course_offering_id=evidence.course_offering_id,
+            student_person_id=evidence.student_person_id,
+        )
+        if target is None:
+            raise GradingRuleError(
+                "External evidence does not match exactly one active official "
+                "course enrollment."
+            )
+        raw_score = parse_external_score(evidence.grade_value)
+        await self._audit.record_external_evidence_event(
+            action="grading.external_evidence.acceptance_requested",
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            evidence_id=evidence_id,
+            correlation_id=context.correlation_id,
+            outcome="intent_recorded",
+            reason=None,
+        )
+        current = await self._repository.get_final_grade_for_course_enrollment(
+            organization_id=context.organization_id,
+            course_enrollment_id=target.course_enrollment_id,
+        )
+        if current is None:
+            grade = await self._record_final_grade(
+                context=context,
+                target=target,
+                grading_scale_id=grading_scale_id,
+                raw_score=raw_score,
+                explanation=explanation,
+            )
+        else:
+            _authorize(context, GRADING_FINAL_REVISE)
+            if explanation is None or not explanation.strip():
+                raise GradingRuleError(
+                    "Revising an existing official grade from external evidence "
+                    "requires an explanation."
+                )
+            grade = await self._revise_final_grade(
+                context=context,
+                current=current,
+                raw_score=raw_score,
+                explanation=explanation,
+                grading_scale_id=grading_scale_id,
+            )
+        await self._evidence.record_acceptance(
+            organization_id=context.organization_id,
+            evidence_id=evidence_id,
+            final_grade_id=grade.id,
+            actor_subject_id=context.subject_id,
+            correlation_id=context.correlation_id,
+        )
+        await self._audit.record_external_evidence_event(
+            action="grading.external_evidence.accepted",
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            evidence_id=evidence_id,
+            correlation_id=context.correlation_id,
+            outcome="succeeded",
+            reason=None,
+        )
+        return grade
+
+    async def reject_external_evidence(
+        self,
+        *,
+        context: TenantActorContext,
+        evidence_id: UUID,
+        reason: str,
+    ) -> None:
+        """Decline pending external evidence with an audited explanation."""
+
+        _authorize(context, GRADING_FINAL_RECORD)
+        if not reason.strip():
+            raise GradingRuleError("External evidence rejection reason is required.")
+        evidence = await self._evidence.get_pending_evidence(
+            organization_id=context.organization_id,
+            evidence_id=evidence_id,
+        )
+        if evidence is None:
+            raise NotFoundError("Pending external grade evidence was not found.")
+        await self._audit.record_external_evidence_event(
+            action="grading.external_evidence.rejection_requested",
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            evidence_id=evidence_id,
+            correlation_id=context.correlation_id,
+            outcome="intent_recorded",
+            reason=reason.strip(),
+        )
+        await self._evidence.record_rejection(
+            organization_id=context.organization_id,
+            evidence_id=evidence_id,
+            reason_code=EXTERNAL_EVIDENCE_REJECTED_REASON_CODE,
+            actor_subject_id=context.subject_id,
+            correlation_id=context.correlation_id,
+        )
+        await self._audit.record_external_evidence_event(
+            action="grading.external_evidence.rejected",
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            evidence_id=evidence_id,
+            correlation_id=context.correlation_id,
+            outcome="succeeded",
+            reason=reason.strip(),
+        )
+
+    async def revision_history(
+        self,
+        *,
+        context: TenantActorContext,
+        final_grade_id: UUID,
+    ) -> tuple[GradeRevision, ...]:
+        """Return immutable history to actors authorized to amend the grade."""
+
+        history = await self.grade_history(
+            context=context,
+            final_grade_id=final_grade_id,
+        )
+        return history.revisions
+
+    async def grade_history(
+        self,
+        *,
+        context: TenantActorContext,
+        final_grade_id: UUID,
+    ) -> FinalGradeHistory:
+        """Return initial recording evidence and immutable amendment history."""
+
+        _authorize(context, GRADING_FINAL_REVISE)
+        grade = await self._repository.get_final_grade(
+            organization_id=context.organization_id,
+            final_grade_id=final_grade_id,
+        )
+        if grade is None:
+            raise NotFoundError("Final grade was not found.")
+        revisions = await self._repository.list_grade_revisions(
+            organization_id=context.organization_id,
+            final_grade_id=grade.id,
+        )
+        return FinalGradeHistory(
+            final_grade_id=grade.id,
+            recorded_by=grade.recorded_by,
+            recorded_at=grade.recorded_at,
+            recorded_after_term_closure=grade.recorded_after_term_closure,
+            recording_explanation=grade.recording_explanation,
+            revisions=revisions,
+        )
+
+    async def transcript(
+        self,
+        *,
+        context: TenantActorContext,
+        student_academic_enrollment_id: UUID,
+    ) -> tuple[TranscriptRecord, ...]:
+        """Return official transcript records for one tenant enrollment."""
+
+        _authorize(context, GRADING_TRANSCRIPT_READ)
+        grades = await self._repository.list_student_final_grades(
+            organization_id=context.organization_id,
+            student_academic_enrollment_id=student_academic_enrollment_id,
+        )
+        return tuple(transcript_record(grade) for grade in grades)
+
+    async def gpa_summary(
+        self,
+        *,
+        context: TenantActorContext,
+        student_academic_enrollment_id: UUID,
+    ) -> GpaSummary:
+        """Return attempted credits, earned credits, and official GPA."""
+
+        _authorize(context, GRADING_TRANSCRIPT_READ)
+        grades = await self._repository.list_student_final_grades(
+            organization_id=context.organization_id,
+            student_academic_enrollment_id=student_academic_enrollment_id,
+        )
+        return calculate_gpa_summary(grades)
+
+    async def _record_final_grade(
+        self,
+        *,
+        context: TenantActorContext,
+        target: GradeTarget,
+        grading_scale_id: UUID,
+        raw_score: Decimal,
+        explanation: str | None,
+    ) -> FinalGrade:
+        """Create the official result for an already resolved grade target."""
+
         async with self._term_writes.hold_grade_write(
             organization_id=context.organization_id,
             term_id=target.term_id,
@@ -216,34 +480,17 @@ class OfficialGradingService:
             )
         return grade
 
-    async def revise_final_grade(
+    async def _revise_final_grade(
         self,
         *,
         context: TenantActorContext,
-        final_grade_id: UUID,
+        current: FinalGrade,
         raw_score: Decimal,
         explanation: str,
-        grading_scale_id: UUID | None = None,
-        expected_revision_number: int | None = None,
+        grading_scale_id: UUID | None,
     ) -> FinalGrade:
-        """Amend an official grade while atomically preserving previous state."""
+        """Amend an already loaded official grade under the term write guard."""
 
-        _authorize(context, GRADING_FINAL_REVISE)
-        if not explanation.strip():
-            raise GradingRuleError("Grade revision explanation is required.")
-        current = await self._repository.get_final_grade(
-            organization_id=context.organization_id,
-            final_grade_id=final_grade_id,
-        )
-        if current is None:
-            raise NotFoundError("Final grade was not found.")
-        if (
-            expected_revision_number is not None
-            and current.revision_number != expected_revision_number
-        ):
-            raise GradeRevisionConflictError(
-                "Final grade revision does not match the requested version."
-            )
         async with self._term_writes.hold_grade_write(
             organization_id=context.organization_id,
             term_id=current.term_id,
@@ -327,78 +574,6 @@ class OfficialGradingService:
             )
         return revised
 
-    async def revision_history(
-        self,
-        *,
-        context: TenantActorContext,
-        final_grade_id: UUID,
-    ) -> tuple[GradeRevision, ...]:
-        """Return immutable history to actors authorized to amend the grade."""
-
-        history = await self.grade_history(
-            context=context,
-            final_grade_id=final_grade_id,
-        )
-        return history.revisions
-
-    async def grade_history(
-        self,
-        *,
-        context: TenantActorContext,
-        final_grade_id: UUID,
-    ) -> FinalGradeHistory:
-        """Return initial recording evidence and immutable amendment history."""
-
-        _authorize(context, GRADING_FINAL_REVISE)
-        grade = await self._repository.get_final_grade(
-            organization_id=context.organization_id,
-            final_grade_id=final_grade_id,
-        )
-        if grade is None:
-            raise NotFoundError("Final grade was not found.")
-        revisions = await self._repository.list_grade_revisions(
-            organization_id=context.organization_id,
-            final_grade_id=grade.id,
-        )
-        return FinalGradeHistory(
-            final_grade_id=grade.id,
-            recorded_by=grade.recorded_by,
-            recorded_at=grade.recorded_at,
-            recorded_after_term_closure=grade.recorded_after_term_closure,
-            recording_explanation=grade.recording_explanation,
-            revisions=revisions,
-        )
-
-    async def transcript(
-        self,
-        *,
-        context: TenantActorContext,
-        student_academic_enrollment_id: UUID,
-    ) -> tuple[TranscriptRecord, ...]:
-        """Return official transcript records for one tenant enrollment."""
-
-        _authorize(context, GRADING_TRANSCRIPT_READ)
-        grades = await self._repository.list_student_final_grades(
-            organization_id=context.organization_id,
-            student_academic_enrollment_id=student_academic_enrollment_id,
-        )
-        return tuple(transcript_record(grade) for grade in grades)
-
-    async def gpa_summary(
-        self,
-        *,
-        context: TenantActorContext,
-        student_academic_enrollment_id: UUID,
-    ) -> GpaSummary:
-        """Return attempted credits, earned credits, and official GPA."""
-
-        _authorize(context, GRADING_TRANSCRIPT_READ)
-        grades = await self._repository.list_student_final_grades(
-            organization_id=context.organization_id,
-            student_academic_enrollment_id=student_academic_enrollment_id,
-        )
-        return calculate_gpa_summary(grades)
-
 
 def _authorize(
     context: TenantActorContext,
@@ -421,6 +596,7 @@ def _require_tenant(
 
 
 __all__ = [
+    "EXTERNAL_EVIDENCE_REJECTED_REASON_CODE",
     "GRADING_CLOSED_TERM_REVISE",
     "GRADING_FINAL_RECORD",
     "GRADING_FINAL_REVISE",

@@ -66,6 +66,34 @@ class AcademicReferenceService:
             course_enrollment_id=course_enrollment_id,
         )
 
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_profile_id: UUID,
+    ) -> AcademicGradeTarget | None:
+        """Resolve the one gradable participation of a student profile."""
+
+        return await self._repository.get_grade_target_for_participant(
+            organization_id=organization_id,
+            course_offering_id=course_offering_id,
+            student_profile_id=student_profile_id,
+        )
+
+    async def list_course_offering_ids_for_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> frozenset[UUID] | None:
+        """Return a tenant term's offerings, or None for an unknown term."""
+
+        return await self._repository.list_course_offering_ids_for_term(
+            organization_id=organization_id,
+            term_id=term_id,
+        )
+
     async def is_term_closed(
         self,
         *,

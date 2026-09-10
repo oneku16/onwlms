@@ -89,11 +89,13 @@ the centralized resolver rather than scattered premium flags.
 
 Platform subscription assignment validates an existing active organization and
 an existing active plan before persisting the tenant-owned reference. The
-assignment boundary accepts only active or trialing start states. Subscription
-suspension and cancellation transitions are not yet validated product workflows,
-so the boundary rejects those lifecycle states rather than accepting an arbitrary
-client-selected status. Tenant feature overrides likewise require an existing
-active organization.
+assignment boundary accepts only active or trialing start states; suspension,
+reactivation, and cancellation are separate audited transitions rather than a
+client-selected status, so an active or trialing subscription may be suspended,
+a suspended one reactivated, and any non-canceled one canceled terminally.
+Withdrawn entitlements follow immediately because resolution already ignores
+suspended and canceled subscriptions. Tenant feature overrides likewise require
+an existing active organization.
 
 ### Academics
 
@@ -105,8 +107,12 @@ facts. Campus identifiers are consumed through the Organizations public contract
 and are not duplicated. Teacher assignments and student academic enrollments
 resolve People-owned profile identifiers through a narrow public contract and
 require the exact organization plus Teacher or Student profile kind. Academic
-enrollment creation is server-owned `active`; completed and withdrawn states
-remain response facts until explicit transition use cases are validated.
+enrollment creation is server-owned `active`. Completed and withdrawn states are
+reached only through explicit, audited, one-way transitions that require an
+explanation: withdrawing an academic enrollment also withdraws its enrolled
+course participations in the same transaction, completing one requires that no
+course participation is still enrolled, and a course withdrawal is refused after
+its term closes while completion remains a legitimate finalization.
 
 Course-selection approval is a new current-state decision, not acceptance of the
 submission-time snapshot. The enrollment, open term, registration deadline,
@@ -129,7 +135,12 @@ or pending application does not preserve eligibility after term closure.
 Owns grading scales and mappings, official final grades, credits attempted and
 earned, GPA contribution, transcript read models, immutable revisions, amendment
 reason, and term-closure enforcement. It alone accepts or rejects Moodle grade
-evidence as an official result. Initial grades and revisions after closure require
+evidence as an official result: an actor with the record permission names the
+grading scale for one pending evidence item, Grading resolves the person's
+active participation through People and Academics without guessing, and then
+records an initial grade or revises the current grade under the ordinary
+permission, closure, and explanation rules. Rejection records an audited
+reason. Initial grades and revisions after closure require
 the separate closed-term amendment permission and a non-empty explanation. The
 current domain has no independently configurable grading-deadline field; term
 closure is the enforced boundary until that policy and its ownership are
@@ -153,12 +164,16 @@ ADR-0006 documents the first deterministic heuristic and its limits.
 
 Owns tenant integration activation, encrypted credentials, external identifier
 mappings, synchronization status, bounded live deadline evidence with
-observation/source metadata, and duplicate-safe grade evidence records. Deadline
-reads are constrained to the mapped user's enrolled Moodle courses and are not
-served from a local cache. Moodle uses supported web services only. Selected-term
-grade reconciliation, authenticated grade-event ingress, retry/quarantine, and
-official-grade acceptance remain deferred until explicit mapping and grading
-policy are approved. Integration data cannot overwrite an owning domain.
+observation/source metadata, duplicate-safe grade evidence records, the
+tenant-signed grade-event signing secret, and selected-term reconciliation
+runs. Deadline reads are constrained to the mapped user's enrolled Moodle
+courses and are not served from a local cache. Moodle uses supported web
+services only. Grade evidence arrives through a signed event ingress or an
+operator-initiated reconciliation of one term's mapped offerings, is stored
+pending with its provenance, and is visible to administrators holding the
+evidence read permission. Integrations never applies a grade: acceptance and
+rejection belong to Grading ([ADR-0010](../adr/ADR-0010-moodle-grade-evidence-acceptance.md)).
+Integration data cannot overwrite an owning domain.
 
 ### Outbox and Provisioning
 
@@ -199,9 +214,12 @@ not expose grade mutation or another consequential write.
 The Next.js application composes platform administration, organization
 administration, student, teacher, guardian, staff, and guest experiences. It
 shows the active organization, permissions, entitlements, integration state,
-loading/empty/error outcomes, and tenant branding. Hidden navigation is not an
-authorization boundary. Finance and absent attendance data are visibly
-unavailable rather than fabricated.
+loading/empty/error outcomes, and tenant branding. Administrative pages are
+interactive workflows that call the same authorized APIs a reviewer would call
+directly; every mutation carries session-bound CSRF protection, the active
+organization header, and disabled controls when the membership lacks the
+permission. Hidden navigation is not an authorization boundary. Finance and
+absent attendance data are visibly unavailable rather than fabricated.
 
 ## Collaboration and Consistency
 
@@ -242,10 +260,12 @@ The target critical release journey is:
 9. the student reads the official grade and GPA summary; and
 10. equivalent access using another organization's actor or identifier is denied.
 
-Steps 1–7, 9, and 10 have bounded application foundations and automated evidence.
-Step 8 is not complete: Moodle evidence currently remains non-authoritative and
-cannot become an official grade without an approved external-event authenticity,
-course-enrollment, grading-scale, and closed-term reconciliation policy.
+Steps 1–10 have bounded application foundations and automated evidence. Step 8
+is exercised with controlled fakes: signed or reconciled Moodle evidence stays
+non-authoritative until an authorized grading actor accepts it with an explicit
+grading scale, and the resulting official grade carries the ordinary
+participation, closure, and explanation rules. Real Moodle compatibility and
+the Moodle-side event sender remain credential-gated.
 
 ## Credential-Gated and Intentionally Deferred Work
 
@@ -261,7 +281,7 @@ fake completed behavior.
 ## Governance
 
 The module map is introduced by the direct first-release authorization. The
-architecture choices in ADR-0002 through ADR-0009 remain Proposed until the
+architecture choices in ADR-0002 through ADR-0010 remain Proposed until the
 required human architecture, security, identity, database, and public-contract
 reviews accept them. Implementation may exercise these reversible choices under
 the direct brief, but a production promotion cannot treat Proposed records as

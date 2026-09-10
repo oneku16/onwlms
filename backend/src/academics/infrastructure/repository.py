@@ -10,10 +10,13 @@ from academics.application.contracts import AcademicGradeTarget
 from academics.application.contracts import AcademicSchedulingReferenceIds
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentCommand
 from academics.application.contracts import AcceptedStudentAcademicEnrollmentResult
+from academics.application.ports import CourseEnrollmentTransitionTransaction
 from academics.application.ports import CourseSelectionDecisionTransaction
 from academics.application.ports import CourseSelectionSubmissionTransaction
+from academics.application.ports import StudentEnrollmentTransitionTransaction
 from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
+from academics.domain.exceptions import EnrollmentTransitionError
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
@@ -680,6 +683,98 @@ class InMemoryAcademicRepository:
         )
         return tuple(values[offset : offset + limit])
 
+    async def get_course_enrollment(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> CourseEnrollment | None:
+        """Return a course enrollment only from the requested tenant."""
+
+        return self._course_enrollments.get((organization_id, course_enrollment_id))
+
+    async def list_course_enrollments_page(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID | None,
+        course_offering_id: UUID | None,
+        status: CourseEnrollmentStatus | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Return a bounded newest-first course-enrollment page for one tenant."""
+
+        values = sorted(
+            (
+                value
+                for value in self._course_enrollments.values()
+                if value.organization_id == organization_id
+                and (
+                    student_academic_enrollment_id is None
+                    or value.student_academic_enrollment_id
+                    == student_academic_enrollment_id
+                )
+                and (
+                    course_offering_id is None
+                    or value.course_offering_id == course_offering_id
+                )
+                and (status is None or value.status is status)
+            ),
+            key=lambda value: str(value.id),
+        )
+        values.sort(key=lambda value: value.enrolled_at, reverse=True)
+        return tuple(values[offset : offset + limit])
+
+    @asynccontextmanager
+    async def student_enrollment_transition(
+        self,
+        *,
+        organization_id: UUID,
+        enrollment_id: UUID,
+    ) -> AsyncIterator[StudentEnrollmentTransitionTransaction]:
+        """Hold the repository lock through one academic enrollment transition."""
+
+        async with self._lock:
+            enrollment = self._student_enrollments.get((organization_id, enrollment_id))
+            if enrollment is None:
+                raise NotFoundError("Student academic enrollment was not found.")
+            yield _InMemoryStudentEnrollmentTransition(
+                repository=self,
+                enrollment=enrollment,
+            )
+
+    @asynccontextmanager
+    async def course_enrollment_transition(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> AsyncIterator[CourseEnrollmentTransitionTransaction]:
+        """Hold the repository lock through one course enrollment transition."""
+
+        async with self._lock:
+            course_enrollment = self._course_enrollments.get(
+                (organization_id, course_enrollment_id)
+            )
+            if course_enrollment is None:
+                raise NotFoundError("Course enrollment was not found.")
+            offering = self._offerings.get(
+                (organization_id, course_enrollment.course_offering_id)
+            )
+            term = (
+                None
+                if offering is None
+                else self._terms.get((organization_id, offering.term_id))
+            )
+            if term is None:
+                raise NotFoundError("Course enrollment term was not found.")
+            yield _InMemoryCourseEnrollmentTransition(
+                repository=self,
+                course_enrollment=course_enrollment,
+                term=term,
+            )
+
     async def admissions_target_exists(
         self,
         *,
@@ -753,6 +848,55 @@ class InMemoryAcademicRepository:
             course_id=course.id,
             term_id=term.id,
             credits=course_enrollment.credits,
+        )
+
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_profile_id: UUID,
+    ) -> AcademicGradeTarget | None:
+        """Resolve exactly one gradable participation or none at all."""
+
+        student_enrollment_ids = {
+            enrollment.id
+            for (tenant_id, _), enrollment in self._student_enrollments.items()
+            if tenant_id == organization_id
+            and enrollment.student_id == student_profile_id
+            and enrollment.status is AcademicEnrollmentStatus.ACTIVE
+        }
+        matches = [
+            course_enrollment
+            for (tenant_id, _), course_enrollment in self._course_enrollments.items()
+            if tenant_id == organization_id
+            and course_enrollment.course_offering_id == course_offering_id
+            and course_enrollment.student_academic_enrollment_id
+            in student_enrollment_ids
+            and course_enrollment.status
+            in {CourseEnrollmentStatus.ENROLLED, CourseEnrollmentStatus.COMPLETED}
+        ]
+        if len(matches) != 1:
+            return None
+        return await self.get_grade_target(
+            organization_id=organization_id,
+            course_enrollment_id=matches[0].id,
+        )
+
+    async def list_course_offering_ids_for_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> frozenset[UUID] | None:
+        """Return offerings of one tenant term, or None for an unknown term."""
+
+        if (organization_id, term_id) not in self._terms:
+            return None
+        return frozenset(
+            offering.id
+            for (tenant_id, _), offering in self._offerings.items()
+            if tenant_id == organization_id and offering.term_id == term_id
         )
 
     async def get_term_closure(
@@ -1016,6 +1160,32 @@ class InMemoryAcademicRepository:
         self._selection_approvals[(approval.organization_id, approval.id)] = approval
         self._persist_course_enrollments(enrollments)
 
+    def _save_student_enrollment_transition_unlocked(
+        self,
+        *,
+        enrollment: StudentAcademicEnrollment,
+        course_enrollments: tuple[CourseEnrollment, ...],
+    ) -> None:
+        """Replace lifecycle state while the caller holds the repository lock."""
+
+        self._student_enrollments[(enrollment.organization_id, enrollment.id)] = (
+            enrollment
+        )
+        for course_enrollment in course_enrollments:
+            self._course_enrollments[
+                (course_enrollment.organization_id, course_enrollment.id)
+            ] = course_enrollment
+
+    def _save_course_enrollment_transition_unlocked(
+        self,
+        course_enrollment: CourseEnrollment,
+    ) -> None:
+        """Replace one course enrollment while the caller holds the lock."""
+
+        self._course_enrollments[
+            (course_enrollment.organization_id, course_enrollment.id)
+        ] = course_enrollment
+
     async def list_approvals(
         self,
         *,
@@ -1236,6 +1406,107 @@ class _InMemoryCourseSelectionTransaction:
             raise CourseSelectionDecisionError(
                 "Course-selection student enrollment changed during mutation."
             )
+
+
+class _InMemoryStudentEnrollmentTransition:
+    """Expose one locked academic enrollment and persist its transition."""
+
+    def __init__(
+        self,
+        *,
+        repository: InMemoryAcademicRepository,
+        enrollment: StudentAcademicEnrollment,
+    ) -> None:
+        self._repository = repository
+        self._enrollment = enrollment
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the academic enrollment protected by the active lock."""
+
+        return self._enrollment
+
+    async def list_course_enrollments(self) -> tuple[CourseEnrollment, ...]:
+        """Return current course enrollments of the locked academic enrollment."""
+
+        return await self._repository.list_course_enrollments(
+            organization_id=self._enrollment.organization_id,
+            student_academic_enrollment_id=self._enrollment.id,
+        )
+
+    async def save_transition(
+        self,
+        *,
+        enrollment: StudentAcademicEnrollment,
+        course_enrollments: tuple[CourseEnrollment, ...],
+    ) -> None:
+        """Persist the transition without reacquiring the held lock."""
+
+        if (
+            enrollment.organization_id != self._enrollment.organization_id
+            or enrollment.id != self._enrollment.id
+        ):
+            raise EnrollmentTransitionError(
+                "Academic enrollment changed during the transition."
+            )
+        for course_enrollment in course_enrollments:
+            if (
+                course_enrollment.organization_id != enrollment.organization_id
+                or course_enrollment.student_academic_enrollment_id != enrollment.id
+            ):
+                raise EnrollmentTransitionError(
+                    "Course enrollment does not belong to the locked enrollment."
+                )
+            key = (course_enrollment.organization_id, course_enrollment.id)
+            if key not in self._repository._course_enrollments:
+                raise NotFoundError("Course enrollment was not found.")
+        self._repository._save_student_enrollment_transition_unlocked(
+            enrollment=enrollment,
+            course_enrollments=course_enrollments,
+        )
+
+
+class _InMemoryCourseEnrollmentTransition:
+    """Expose one locked course enrollment with its term and persist its transition."""
+
+    def __init__(
+        self,
+        *,
+        repository: InMemoryAcademicRepository,
+        course_enrollment: CourseEnrollment,
+        term: Term,
+    ) -> None:
+        self._repository = repository
+        self._course_enrollment = course_enrollment
+        self._term = term
+
+    @property
+    def course_enrollment(self) -> CourseEnrollment:
+        """Return the course enrollment protected by the active lock."""
+
+        return self._course_enrollment
+
+    @property
+    def term(self) -> Term:
+        """Return the offering term state read under the active lock."""
+
+        return self._term
+
+    async def save_transition(
+        self,
+        *,
+        course_enrollment: CourseEnrollment,
+    ) -> None:
+        """Persist the transition without reacquiring the held lock."""
+
+        if (
+            course_enrollment.organization_id != self._course_enrollment.organization_id
+            or course_enrollment.id != self._course_enrollment.id
+        ):
+            raise EnrollmentTransitionError(
+                "Course enrollment changed during the transition."
+            )
+        self._repository._save_course_enrollment_transition_unlocked(course_enrollment)
 
 
 def _ensure_unique_code(

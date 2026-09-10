@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appendResource,
   parseGuardianGradeCollection,
   parseResourceCollection,
+  resourceLabel,
+  resourceTitle,
 } from "@/lib/api/resources";
 
 describe("resource projections", () => {
@@ -121,6 +124,21 @@ describe("resource projections", () => {
   it("fails visibly instead of silently dropping an unsupported row", () => {
     expect(() => parseResourceCollection([{ unexpected: true }])).toThrow(
       "The resource collection response is not supported.",
+    );
+  });
+
+  it("appends created resources and labels selections by code and title", () => {
+    const campus = { id: "campus-1", title: "North Valley", code: "NV" };
+    const appended = appendResource({ items: [], total: 0 }, campus);
+    expect(appended).toEqual({ items: [campus], total: 1 });
+    expect(appendResource({ items: [], total: null }, campus).total).toBeNull();
+    expect(resourceLabel(campus)).toBe("NV · North Valley");
+    expect(resourceLabel({ id: "p-1", title: "A. Person" })).toBe("A. Person");
+    expect(resourceTitle([campus], "campus-1", "Campus")).toBe(
+      "NV · North Valley",
+    );
+    expect(resourceTitle([], "0198e706-a6d9-7b24", "Campus")).toBe(
+      "Campus 0198e706",
     );
   });
 

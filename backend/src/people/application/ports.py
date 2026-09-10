@@ -108,6 +108,15 @@ class PeopleReferenceRepository(Protocol):
         """Return matching student profile IDs without exposing profile data."""
         ...
 
+    async def resolve_student_profile_id(
+        self,
+        *,
+        organization_id: UUID,
+        person_id: UUID,
+    ) -> UUID | None:
+        """Return the tenant person's student profile ID without profile data."""
+        ...
+
 
 class ProfileActivationWriter(Protocol):
     """Atomically persist an activating profile and its publication fact."""

@@ -21,7 +21,6 @@ from audit.infrastructure.repository import SQLAlchemyAuditRepository
 from audit.infrastructure.sinks import ApplicationAuditSink
 from audit.presentation.router import create_audit_router
 from core.application import create_app
-from core.field_encryption import FieldCipher
 from core.settings import AppEnvironment
 from core.settings import Settings
 from course_selection_adapters import CourseSelectionStudentOwnershipAdapter
@@ -34,13 +33,10 @@ from identity.composition import create_identity_resources
 from identity.composition import install_identity_routes
 from identity.presentation.dependencies import require_actor
 from identity.presentation.dependencies import require_csrf
-from integrations.application.service import MoodleIntegrationService
-from integrations.infrastructure.factory import MoodleGatewayFactoryAdapter
-from integrations.infrastructure.grade_receiver import (
-    ReviewRequiredGradeEvidenceReceiver,
-)
-from integrations.infrastructure.repository import SQLAlchemyMoodleIntegrationRepository
-from integrations.presentation.router import create_integrations_router
+from integration_adapters import AcademicTermOfferingAdapter
+from integration_adapters import MoodleGradeEvidenceDirectoryAdapter
+from integrations.composition import create_moodle_resources
+from integrations.composition import install_integration_routes
 from mcp_gateway.composition import MCPApplicationResources
 from mcp_gateway.composition import create_mcp_application
 from mcp_gateway.composition import create_self_service_read_resources
@@ -133,11 +129,22 @@ def create_application(
         audit=audit_sink,
         ownership=CourseSelectionStudentOwnershipAdapter(people_ownership),
     )
+    moodle = create_moodle_resources(
+        database=app_database,
+        integration_encryption_key=app_settings.INTEGRATION_ENCRYPTION_KEY,
+        request_timeout_seconds=app_settings.MOODLE_REQUEST_TIMEOUT_SECONDS,
+        offerings=AcademicTermOfferingAdapter(academic_services.references),
+        audit=audit_sink,
+    )
     grading_service = create_official_grading_service(
         database=app_database,
-        targets=AcademicGradeTargetAdapter(academic_services.references),
+        targets=AcademicGradeTargetAdapter(
+            academic_services.references,
+            people=people.references,
+        ),
         terms=AcademicTermClosureAdapter(academic_services.references),
         audit=audit_sink,
+        evidence=MoodleGradeEvidenceDirectoryAdapter(moodle.service),
     )
     scheduling_resources = AcademicSchedulingResourceAdapter(
         academic_services.references,
@@ -167,26 +174,12 @@ def create_application(
         ),
     )
 
-    integration_cipher = FieldCipher(app_settings.INTEGRATION_ENCRYPTION_KEY)
-    integration_repository = SQLAlchemyMoodleIntegrationRepository(app_database)
-    moodle_gateway_factory = MoodleGatewayFactoryAdapter(
-        repository=integration_repository,
-        cipher=integration_cipher,
-        timeout_seconds=app_settings.MOODLE_REQUEST_TIMEOUT_SECONDS,
-    )
-    moodle_service = MoodleIntegrationService(
-        repository=integration_repository,
-        gateway_factory=moodle_gateway_factory,
-        grade_receiver=ReviewRequiredGradeEvidenceReceiver(),
-        cipher=integration_cipher,
-        audit=audit_sink,
-    )
     self_service = create_self_service_read_resources(
         settings=app_settings,
         database=app_database,
         memberships=people.memberships,
-        moodle_repository=integration_repository,
-        moodle_gateway_factory=moodle_gateway_factory,
+        moodle_repository=moodle.repository,
+        moodle_gateway_factory=moodle.gateway_factory,
     )
     notification_service = NotificationService(
         repository=SQLAlchemyNotificationRepository(app_database),
@@ -208,7 +201,6 @@ def create_application(
         shutdown_callbacks=shutdown_callbacks,
     )
     app.state.audit_service = audit_service
-    app.state.moodle_service = moodle_service
     app.state.notification_service = notification_service
     app.state.provisioning_service = provisioning_service
 
@@ -234,11 +226,11 @@ def create_application(
         actor_dependency=require_actor,
     )
     app.include_router(create_audit_router(require_actor))
-    app.include_router(
-        create_integrations_router(
-            actor_dependency=require_actor,
-            csrf_dependency=require_csrf,
-        )
+    install_integration_routes(
+        app=app,
+        resources=moodle,
+        actor_dependency=require_actor,
+        csrf_dependency=require_csrf,
     )
     app.include_router(
         create_notifications_router(

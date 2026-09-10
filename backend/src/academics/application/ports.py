@@ -2,6 +2,7 @@
 
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
+from typing import Literal
 from typing import Protocol
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from academics.domain.models import AcademicYear
 from academics.domain.models import Cohort
 from academics.domain.models import Course
 from academics.domain.models import CourseEnrollment
+from academics.domain.models import CourseEnrollmentStatus
 from academics.domain.models import CourseOffering
 from academics.domain.models import CourseSelectionApproval
 from academics.domain.models import CourseSelectionPolicy
@@ -62,6 +64,50 @@ class AcademicProfileDirectory(Protocol):
         student_profile_id: UUID,
     ) -> bool:
         """Return whether the identifier is a student in the exact tenant."""
+        ...
+
+
+class StudentEnrollmentTransitionTransaction(Protocol):
+    """Hold one academic enrollment lock through transition evaluation and save."""
+
+    @property
+    def student_enrollment(self) -> StudentAcademicEnrollment:
+        """Return the exact locked current academic enrollment."""
+        ...
+
+    async def list_course_enrollments(self) -> tuple[CourseEnrollment, ...]:
+        """Return and lock every course enrollment of the locked enrollment."""
+        ...
+
+    async def save_transition(
+        self,
+        *,
+        enrollment: StudentAcademicEnrollment,
+        course_enrollments: tuple[CourseEnrollment, ...],
+    ) -> None:
+        """Persist the transitioned enrollment and cascaded course enrollments."""
+        ...
+
+
+class CourseEnrollmentTransitionTransaction(Protocol):
+    """Hold one course enrollment lock and its term state through one transition."""
+
+    @property
+    def course_enrollment(self) -> CourseEnrollment:
+        """Return the exact locked current course enrollment."""
+        ...
+
+    @property
+    def term(self) -> Term:
+        """Return the offering term whose closure state is protected until commit."""
+        ...
+
+    async def save_transition(
+        self,
+        *,
+        course_enrollment: CourseEnrollment,
+    ) -> None:
+        """Persist the transitioned course enrollment in the active transaction."""
         ...
 
 
@@ -375,6 +421,54 @@ class AcademicCatalogRepository(Protocol):
         """Return a bounded stable page of official academic enrollments."""
         ...
 
+    async def get_course_enrollment(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> CourseEnrollment | None:
+        """Return an official course enrollment only from the requested tenant."""
+        ...
+
+    async def list_course_enrollments_page(
+        self,
+        *,
+        organization_id: UUID,
+        student_academic_enrollment_id: UUID | None,
+        course_offering_id: UUID | None,
+        status: CourseEnrollmentStatus | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Return a bounded stable page of official course enrollments."""
+        ...
+
+    def student_enrollment_transition(
+        self,
+        *,
+        organization_id: UUID,
+        enrollment_id: UUID,
+    ) -> AbstractAsyncContextManager[StudentEnrollmentTransitionTransaction]:
+        """Lock one exact-tenant academic enrollment through one transition.
+
+        Entering the context raises NotFoundError when the enrollment does not
+        exist inside the tenant.
+        """
+        ...
+
+    def course_enrollment_transition(
+        self,
+        *,
+        organization_id: UUID,
+        course_enrollment_id: UUID,
+    ) -> AbstractAsyncContextManager[CourseEnrollmentTransitionTransaction]:
+        """Lock one exact-tenant course enrollment and its term through one transition.
+
+        Entering the context raises NotFoundError when the course enrollment does
+        not exist inside the tenant.
+        """
+        ...
+
 
 class CourseSelectionEvaluationCatalog(Protocol):
     """Read the current catalog facts required to evaluate one selection."""
@@ -588,6 +682,25 @@ class AcademicReferenceRepository(Protocol):
         """Return joined official facts for one tenant course enrollment."""
         ...
 
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_profile_id: UUID,
+    ) -> AcademicGradeTarget | None:
+        """Return the one gradable participation of a student in an offering."""
+        ...
+
+    async def list_course_offering_ids_for_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> frozenset[UUID] | None:
+        """Return offering identifiers, or None when the tenant term is unknown."""
+        ...
+
     async def get_term_closure(
         self,
         *,
@@ -668,7 +781,34 @@ class TermClosureAuditSink(Protocol):
         ...
 
 
-class AcademicAuditSink(CourseSelectionAuditSink, TermClosureAuditSink, Protocol):
+EnrollmentTransitionTargetType = Literal["academic_enrollment", "course_enrollment"]
+
+
+class EnrollmentTransitionAuditSink(Protocol):
+    """Record privacy-minimized intent and outcome for enrollment transitions."""
+
+    async def record_enrollment_transition_event(
+        self,
+        *,
+        action: str,
+        organization_id: UUID,
+        actor_subject_id: UUID,
+        target_type: EnrollmentTransitionTargetType,
+        target_id: UUID,
+        correlation_id: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        """Record one transition intent or outcome carrying only its explanation."""
+        ...
+
+
+class AcademicAuditSink(
+    CourseSelectionAuditSink,
+    TermClosureAuditSink,
+    EnrollmentTransitionAuditSink,
+    Protocol,
+):
     """Combine the audit capabilities consumed by the Academics module."""
 
 
@@ -702,6 +842,7 @@ __all__ = [
     "AcceptedStudentAcademicEnrollmentRegistrar",
     "AdmissionsAcademicEnrollmentRepository",
     "CampusDirectory",
+    "CourseEnrollmentTransitionTransaction",
     "CourseSelectionAuditSink",
     "CourseSelectionDecisionTransaction",
     "CourseSelectionEnrollmentReader",
@@ -709,5 +850,8 @@ __all__ = [
     "CourseSelectionRepository",
     "CourseSelectionStudentOwnership",
     "CourseSelectionSubmissionTransaction",
+    "EnrollmentTransitionAuditSink",
+    "EnrollmentTransitionTargetType",
+    "StudentEnrollmentTransitionTransaction",
     "TermClosureAuditSink",
 ]

@@ -1,6 +1,7 @@
 """Plans, features, subscriptions, overrides, and resolved entitlement values."""
 
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
@@ -42,6 +43,22 @@ class SubscriptionStatus(StrEnum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
     CANCELED = "canceled"
+
+
+_SUSPENDABLE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.TRIALING,
+    }
+)
+_REACTIVATABLE_STATUSES = frozenset({SubscriptionStatus.SUSPENDED})
+_CANCELABLE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.TRIALING,
+        SubscriptionStatus.SUSPENDED,
+    }
+)
 
 
 class UsagePeriod(StrEnum):
@@ -147,6 +164,37 @@ class Subscription:
             and self.starts_at <= at
             and (self.ends_at is None or at < self.ends_at)
         )
+
+    def suspend(self) -> Subscription:
+        """Return the suspended subscription; only active or trialing may suspend."""
+
+        self._require_status(_SUSPENDABLE_STATUSES, transition="suspended")
+        return replace(self, status=SubscriptionStatus.SUSPENDED)
+
+    def reactivate(self) -> Subscription:
+        """Return the reactivated subscription; only a suspended one may reactivate."""
+
+        self._require_status(_REACTIVATABLE_STATUSES, transition="reactivated")
+        return replace(self, status=SubscriptionStatus.ACTIVE)
+
+    def cancel(self) -> Subscription:
+        """Return the canceled subscription; cancellation is terminal."""
+
+        self._require_status(_CANCELABLE_STATUSES, transition="canceled")
+        return replace(self, status=SubscriptionStatus.CANCELED)
+
+    def _require_status(
+        self,
+        allowed: frozenset[SubscriptionStatus],
+        *,
+        transition: str,
+    ) -> None:
+        """Reject lifecycle transitions the current status does not permit."""
+
+        if self.status not in allowed:
+            raise InvalidEntitlementError(
+                f"A {self.status.value} subscription cannot be {transition}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,16 +2,17 @@
 
 from uuid import UUID
 
+from integrations.domain.moodle import GradeEvidenceDisposition
 from integrations.domain.moodle import MoodleFinalGradeEvidence
 
 
 class ReviewRequiredGradeEvidenceReceiver:
-    """Keep Moodle evidence non-authoritative until an explicit mapping exists.
+    """Keep Moodle evidence non-authoritative until a person explicitly accepts it.
 
     OwnSIS cannot infer an official course enrollment or grading scale from a
-    Moodle user/course value alone. The surrounding integration service stores
-    the evidence and marks it rejected for automatic application, leaving it
-    visible for a later, explicit reconciliation flow.
+    Moodle user/course value alone. Intake stores the evidence as pending, and
+    an authorized grading actor later accepts or rejects it through the
+    grading module's explicit acceptance capability.
     """
 
     async def accept_moodle_evidence(
@@ -20,11 +21,11 @@ class ReviewRequiredGradeEvidenceReceiver:
         organization_id: UUID,
         evidence: MoodleFinalGradeEvidence,
         correlation_id: str,
-    ) -> bool:
-        """Decline automatic grade mutation without discarding the evidence."""
+    ) -> GradeEvidenceDisposition:
+        """Decline automatic grade mutation and request explicit review."""
 
         del organization_id, evidence, correlation_id
-        return False
+        return GradeEvidenceDisposition.REVIEW_REQUIRED
 
 
 __all__ = ["ReviewRequiredGradeEvidenceReceiver"]

@@ -1272,6 +1272,72 @@
         "title": "CourseBody",
         "type": "object"
       },
+      "CourseEnrollmentResponse": {
+        "description": "Serialize one official course enrollment lifecycle fact.",
+        "properties": {
+          "course_offering_id": {
+            "format": "uuid",
+            "title": "Course Offering Id",
+            "type": "string"
+          },
+          "credits": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Credits",
+            "type": "string"
+          },
+          "enrolled_at": {
+            "format": "date-time",
+            "title": "Enrolled At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "selection_request_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Request Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CourseEnrollmentStatus"
+          },
+          "student_academic_enrollment_id": {
+            "format": "uuid",
+            "title": "Student Academic Enrollment Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "student_academic_enrollment_id",
+          "course_offering_id",
+          "credits",
+          "status",
+          "enrolled_at",
+          "selection_request_id"
+        ],
+        "title": "CourseEnrollmentResponse",
+        "type": "object"
+      },
+      "CourseEnrollmentStatus": {
+        "description": "Describe a student's official participation in a course offering.",
+        "enum": [
+          "enrolled",
+          "completed",
+          "withdrawn"
+        ],
+        "title": "CourseEnrollmentStatus",
+        "type": "string"
+      },
       "CourseOfferingBody": {
         "properties": {
           "campus_id": {
@@ -2386,6 +2452,86 @@
         "title": "EnrollmentConversionResponse",
         "type": "object"
       },
+      "EnrollmentTransitionBody": {
+        "additionalProperties": false,
+        "description": "Carry the required explanation for one audited enrollment transition.",
+        "properties": {
+          "explanation": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "explanation"
+        ],
+        "title": "EnrollmentTransitionBody",
+        "type": "object"
+      },
+      "ExternalEvidenceAcceptanceBody": {
+        "description": "Validate acceptance of pending external evidence as an official result.",
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "grading_scale_id": {
+            "format": "uuid",
+            "title": "Grading Scale Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grading_scale_id"
+        ],
+        "title": "ExternalEvidenceAcceptanceBody",
+        "type": "object"
+      },
+      "ExternalEvidenceRejectionBody": {
+        "description": "Validate an explicit reviewer rejection of pending external evidence.",
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ExternalEvidenceRejectionBody",
+        "type": "object"
+      },
+      "ExternalEvidenceRejectionResponse": {
+        "description": "Confirm that evidence was rejected without exposing grade values.",
+        "properties": {
+          "evidence_id": {
+            "format": "uuid",
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "status"
+        ],
+        "title": "ExternalEvidenceRejectionResponse",
+        "type": "object"
+      },
       "FacultyBody": {
         "properties": {
           "campus_id": {
@@ -3005,6 +3151,156 @@
         ],
         "title": "GradeBandBody",
         "type": "object"
+      },
+      "GradeEventReceiptResponse": {
+        "additionalProperties": false,
+        "description": "Report duplicate-safe intake of one authenticated grade event.",
+        "properties": {
+          "duplicate": {
+            "title": "Duplicate",
+            "type": "boolean"
+          },
+          "external_event_id": {
+            "title": "External Event Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_event_id",
+          "duplicate",
+          "status"
+        ],
+        "title": "GradeEventReceiptResponse",
+        "type": "object"
+      },
+      "GradeEventSecretRequest": {
+        "additionalProperties": false,
+        "description": "Validate the shared secret that authenticates Moodle-side grade events.",
+        "properties": {
+          "secret": {
+            "format": "password",
+            "title": "Secret",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "secret"
+        ],
+        "title": "GradeEventSecretRequest",
+        "type": "object"
+      },
+      "GradeEvidenceResponse": {
+        "additionalProperties": false,
+        "description": "Serialize stored Moodle grade evidence and its resolution state.",
+        "properties": {
+          "accepted_final_grade_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Final Grade Id"
+          },
+          "course_offering_id": {
+            "format": "uuid",
+            "title": "Course Offering Id",
+            "type": "string"
+          },
+          "external_event_id": {
+            "title": "External Event Id",
+            "type": "string"
+          },
+          "grade_value": {
+            "title": "Grade Value",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "source_version": {
+            "title": "Source Version",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "student_person_id": {
+            "format": "uuid",
+            "title": "Student Person Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "external_event_id",
+          "course_offering_id",
+          "student_person_id",
+          "grade_value",
+          "observed_at",
+          "source_version",
+          "status",
+          "reason_code",
+          "received_at",
+          "accepted_final_grade_id",
+          "resolved_at"
+        ],
+        "title": "GradeEvidenceResponse",
+        "type": "object"
+      },
+      "GradeEvidenceStatus": {
+        "description": "Describe whether official grading policy has resolved stored evidence.",
+        "enum": [
+          "pending",
+          "accepted",
+          "rejected"
+        ],
+        "title": "GradeEvidenceStatus",
+        "type": "string"
       },
       "GradeRevisionResponse": {
         "description": "Serialize one immutable official-grade amendment record.",
@@ -3731,6 +4027,10 @@
             "title": "Configured",
             "type": "boolean"
           },
+          "grade_events_configured": {
+            "title": "Grade Events Configured",
+            "type": "boolean"
+          },
           "last_error_code": {
             "anyOf": [
               {
@@ -3763,7 +4063,8 @@
           "base_url",
           "status",
           "last_success_at",
-          "last_error_code"
+          "last_error_code",
+          "grade_events_configured"
         ],
         "title": "MoodleStatusResponse",
         "type": "object"
@@ -4254,6 +4555,110 @@
           "last_error_code"
         ],
         "title": "ProvisioningJobResponse",
+        "type": "object"
+      },
+      "ReconciliationRequest": {
+        "additionalProperties": false,
+        "description": "Select the tenant term whose mapped offerings should be observed.",
+        "properties": {
+          "term_id": {
+            "format": "uuid",
+            "title": "Term Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "term_id"
+        ],
+        "title": "ReconciliationRequest",
+        "type": "object"
+      },
+      "ReconciliationRunResponse": {
+        "additionalProperties": false,
+        "description": "Serialize one reconciliation run without provider payloads.",
+        "properties": {
+          "duplicate_count": {
+            "title": "Duplicate Count",
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "new_evidence_count": {
+            "title": "New Evidence Count",
+            "type": "integer"
+          },
+          "observed_count": {
+            "title": "Observed Count",
+            "type": "integer"
+          },
+          "offering_count": {
+            "title": "Offering Count",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "term_id": {
+            "format": "uuid",
+            "title": "Term Id",
+            "type": "string"
+          },
+          "unmapped_offering_count": {
+            "title": "Unmapped Offering Count",
+            "type": "integer"
+          },
+          "unmapped_user_count": {
+            "title": "Unmapped User Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "term_id",
+          "status",
+          "started_at",
+          "finished_at",
+          "offering_count",
+          "unmapped_offering_count",
+          "observed_count",
+          "new_evidence_count",
+          "duplicate_count",
+          "unmapped_user_count",
+          "error_code"
+        ],
+        "title": "ReconciliationRunResponse",
         "type": "object"
       },
       "RecurrenceBody": {
@@ -5145,6 +5550,67 @@
         ],
         "title": "StudentEnrollmentResponse",
         "type": "object"
+      },
+      "SubscriptionResponse": {
+        "description": "Expose one organization's current subscription lifecycle state.",
+        "properties": {
+          "ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "plan_id": {
+            "format": "uuid",
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "starts_at": {
+            "format": "date-time",
+            "title": "Starts At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SubscriptionStatus"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "plan_id",
+          "status",
+          "starts_at",
+          "ends_at"
+        ],
+        "title": "SubscriptionResponse",
+        "type": "object"
+      },
+      "SubscriptionStatus": {
+        "description": "Govern whether plan grants participate in feature resolution.",
+        "enum": [
+          "trialing",
+          "active",
+          "suspended",
+          "canceled"
+        ],
+        "title": "SubscriptionStatus",
+        "type": "string"
       },
       "TeacherAssignmentBody": {
         "properties": {
@@ -6136,6 +6602,291 @@
           }
         },
         "summary": "Create Cohort",
+        "tags": [
+          "academics"
+        ]
+      }
+    },
+    "/api/v1/academics/course-enrollments": {
+      "get": {
+        "description": "Return a bounded page of official course enrollments for the tenant.",
+        "operationId": "list_course_enrollments_api_v1_academics_course_enrollments_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "student_academic_enrollment_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Student Academic Enrollment Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "course_offering_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Course Offering Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CourseEnrollmentStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CourseEnrollmentResponse"
+                  },
+                  "title": "Response List Course Enrollments Api V1 Academics Course Enrollments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Course Enrollments",
+        "tags": [
+          "academics"
+        ]
+      }
+    },
+    "/api/v1/academics/course-enrollments/{course_enrollment_id}/complete": {
+      "post": {
+        "description": "Complete one course enrollment; finalization remains allowed after closure.",
+        "operationId": "complete_course_enrollment_api_v1_academics_course_enrollments__course_enrollment_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_enrollment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Course Enrollment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentTransitionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourseEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Complete Course Enrollment",
+        "tags": [
+          "academics"
+        ]
+      }
+    },
+    "/api/v1/academics/course-enrollments/{course_enrollment_id}/withdraw": {
+      "post": {
+        "description": "Withdraw one course enrollment while its offering term remains open.",
+        "operationId": "withdraw_course_enrollment_api_v1_academics_course_enrollments__course_enrollment_id__withdraw_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_enrollment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Course Enrollment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentTransitionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourseEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Course Enrollment",
         "tags": [
           "academics"
         ]
@@ -7854,6 +8605,164 @@
           }
         },
         "summary": "Create Student Enrollment",
+        "tags": [
+          "academics"
+        ]
+      }
+    },
+    "/api/v1/academics/student-enrollments/{enrollment_id}/complete": {
+      "post": {
+        "description": "Complete one academic enrollment once no course remains enrolled.",
+        "operationId": "complete_student_enrollment_api_v1_academics_student_enrollments__enrollment_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "enrollment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Enrollment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentTransitionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Complete Student Enrollment",
+        "tags": [
+          "academics"
+        ]
+      }
+    },
+    "/api/v1/academics/student-enrollments/{enrollment_id}/withdraw": {
+      "post": {
+        "description": "Withdraw one academic enrollment and cascade to its enrolled courses.",
+        "operationId": "withdraw_student_enrollment_api_v1_academics_student_enrollments__enrollment_id__withdraw_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "enrollment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Enrollment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentTransitionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Student Enrollment",
         "tags": [
           "academics"
         ]
@@ -9900,6 +10809,164 @@
         ]
       }
     },
+    "/api/v1/grading/external-evidence/{evidence_id}/accept": {
+      "post": {
+        "description": "Record or revise an official grade from pending external evidence.",
+        "operationId": "accept_external_evidence_api_v1_grading_external_evidence__evidence_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalEvidenceAcceptanceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalGradeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept External Evidence",
+        "tags": [
+          "grading"
+        ]
+      }
+    },
+    "/api/v1/grading/external-evidence/{evidence_id}/reject": {
+      "post": {
+        "description": "Decline pending external evidence with an audited reason.",
+        "operationId": "reject_external_evidence_api_v1_grading_external_evidence__evidence_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalEvidenceRejectionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEvidenceRejectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject External Evidence",
+        "tags": [
+          "grading"
+        ]
+      }
+    },
     "/api/v1/grading/final-grades": {
       "post": {
         "description": "Create one authoritative final grade.",
@@ -10698,6 +11765,525 @@
           }
         },
         "summary": "Configure Moodle",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/moodle/grade-event-secret": {
+      "put": {
+        "description": "Store or rotate the tenant's grade-event signing secret.",
+        "operationId": "configure_grade_event_secret_api_v1_integrations_moodle_grade_event_secret_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GradeEventSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoodleStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Configure Grade Event Secret",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/moodle/grade-events/{organization_id}": {
+      "post": {
+        "description": "Accept one tenant-signed Moodle grade event without a browser session.",
+        "operationId": "receive_grade_event_api_v1_integrations_moodle_grade_events__organization_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-OwnSIS-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ownsis-Signature"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-OwnSIS-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Ownsis-Timestamp"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradeEventReceiptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Grade Event",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/moodle/grade-evidence": {
+      "get": {
+        "description": "Return a bounded page of stored evidence for authorized reviewers.",
+        "operationId": "list_grade_evidence_api_v1_integrations_moodle_grade_evidence_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/GradeEvidenceStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "course_offering_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Course Offering Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GradeEvidenceResponse"
+                  },
+                  "title": "Response List Grade Evidence Api V1 Integrations Moodle Grade Evidence Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Grade Evidence",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/moodle/grade-evidence/{evidence_id}": {
+      "get": {
+        "description": "Return one stored evidence record for authorized reviewers.",
+        "operationId": "get_grade_evidence_api_v1_integrations_moodle_grade_evidence__evidence_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradeEvidenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grade Evidence",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/moodle/grade-reconciliations": {
+      "get": {
+        "description": "Return a bounded newest-first page of reconciliation runs.",
+        "operationId": "list_reconciliation_runs_api_v1_integrations_moodle_grade_reconciliations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReconciliationRunResponse"
+                  },
+                  "title": "Response List Reconciliation Runs Api V1 Integrations Moodle Grade Reconciliations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Reconciliation Runs",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "description": "Observe Moodle course totals for one term as pending evidence.",
+        "operationId": "reconcile_term_grades_api_v1_integrations_moodle_grade_reconciliations_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Term Grades",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/moodle/grade-reconciliations/{run_id}": {
+      "get": {
+        "description": "Return one reconciliation run of the active organization.",
+        "operationId": "get_reconciliation_run_api_v1_integrations_moodle_grade_reconciliations__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Reconciliation Run",
         "tags": [
           "integrations"
         ]
@@ -13362,6 +14948,64 @@
       }
     },
     "/api/v1/platform/organizations/{organization_id}/subscription": {
+      "get": {
+        "description": "Return one organization's current subscription through platform policy.",
+        "operationId": "get_subscription_api_v1_platform_organizations__organization_id__subscription_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Subscription",
+        "tags": [
+          "entitlements"
+        ]
+      },
       "put": {
         "description": "Assign the current plan for one organization through platform policy.",
         "operationId": "assign_subscription_api_v1_platform_organizations__organization_id__subscription_put",
@@ -13433,6 +15077,213 @@
           }
         },
         "summary": "Assign Subscription",
+        "tags": [
+          "entitlements"
+        ]
+      }
+    },
+    "/api/v1/platform/organizations/{organization_id}/subscription/cancel": {
+      "post": {
+        "description": "Cancel one organization's current subscription through platform policy.",
+        "operationId": "cancel_subscription_api_v1_platform_organizations__organization_id__subscription_cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Subscription",
+        "tags": [
+          "entitlements"
+        ]
+      }
+    },
+    "/api/v1/platform/organizations/{organization_id}/subscription/reactivate": {
+      "post": {
+        "description": "Reactivate one organization's suspended subscription through platform policy.",
+        "operationId": "reactivate_subscription_api_v1_platform_organizations__organization_id__subscription_reactivate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reactivate Subscription",
+        "tags": [
+          "entitlements"
+        ]
+      }
+    },
+    "/api/v1/platform/organizations/{organization_id}/subscription/suspend": {
+      "post": {
+        "description": "Suspend one organization's current subscription through platform policy.",
+        "operationId": "suspend_subscription_api_v1_platform_organizations__organization_id__subscription_suspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Organization-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Organization-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Csrf-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suspend Subscription",
         "tags": [
           "entitlements"
         ]

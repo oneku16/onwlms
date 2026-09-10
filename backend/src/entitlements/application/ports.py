@@ -11,6 +11,7 @@ from entitlements.domain.models import FeatureCode
 from entitlements.domain.models import Plan
 from entitlements.domain.models import ResolvedEntitlement
 from entitlements.domain.models import Subscription
+from entitlements.domain.models import SubscriptionStatus
 
 
 class EntitlementRepository(Protocol):
@@ -61,6 +62,29 @@ class EntitlementRepository(Protocol):
         subscription: Subscription,
     ) -> None:
         """Create or replace one organization's current subscription."""
+        ...
+
+    async def get_current_subscription(
+        self,
+        *,
+        organization_id: UUID,
+    ) -> Subscription | None:
+        """Return the organization's current subscription when one is assigned."""
+        ...
+
+    async def update_subscription(
+        self,
+        subscription: Subscription,
+        *,
+        expected_status: SubscriptionStatus,
+    ) -> None:
+        """Replace the current subscription's lifecycle state under a row lock.
+
+        The stored subscription must still carry the given identifier and the
+        expected status; otherwise raise EntitlementNotFoundError or
+        EntitlementConflictError so a transition computed from a stale read
+        never overwrites a concurrent lifecycle change.
+        """
         ...
 
     async def set_override(

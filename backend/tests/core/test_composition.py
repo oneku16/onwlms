@@ -38,6 +38,11 @@ async def test_full_composition_exposes_operational_routes() -> None:
     assert "/api/v1/self-service/teacher/schedule" in paths
     assert "/api/v1/self-service/guardian/linked-students" in paths
     assert "/api/v1/integrations/moodle/status" in paths
+    assert "/api/v1/integrations/moodle/grade-event-secret" in paths
+    assert "/api/v1/integrations/moodle/grade-events/{organization_id}" in paths
+    assert "/api/v1/integrations/moodle/grade-evidence" in paths
+    assert "/api/v1/integrations/moodle/grade-reconciliations" in paths
+    assert "/api/v1/grading/external-evidence/{evidence_id}/accept" in paths
     assert "/api/v1/operations/provisioning" in paths
     assert "/api/v1/notifications" in paths
     assert "/api/v1/audit" in paths

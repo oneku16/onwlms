@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from entitlements.domain.exceptions import EntitlementConflictError
+from entitlements.domain.exceptions import EntitlementNotFoundError
 from entitlements.domain.models import EntitlementOverride
 from entitlements.domain.models import EntitlementSnapshot
 from entitlements.domain.models import Feature
@@ -182,6 +183,61 @@ class SQLAlchemyEntitlementRepository:
                     session.add(model)
                 else:
                     model.id = subscription.id
+                model.plan_id = subscription.plan_id
+                model.status = subscription.status.value
+                model.starts_at = subscription.starts_at
+                model.ends_at = subscription.ends_at
+        except IntegrityError as exc:
+            raise EntitlementConflictError("Subscription plan is invalid") from exc
+
+    async def get_current_subscription(
+        self,
+        *,
+        organization_id: UUID,
+    ) -> Subscription | None:
+        """Read one organization's current subscription under its tenant context."""
+
+        async with self._database.session(
+            organization_id=organization_id,
+        ) as session:
+            model = await session.scalar(
+                select(SubscriptionModel).where(
+                    SubscriptionModel.organization_id == organization_id,
+                )
+            )
+            if model is None:
+                return None
+            return self._subscription_to_domain(model)
+
+    async def update_subscription(
+        self,
+        subscription: Subscription,
+        *,
+        expected_status: SubscriptionStatus,
+    ) -> None:
+        """Apply one lifecycle transition to the locked current subscription row."""
+
+        try:
+            async with self._database.session(
+                organization_id=subscription.organization_id,
+            ) as session:
+                model = await session.scalar(
+                    select(SubscriptionModel)
+                    .where(
+                        SubscriptionModel.organization_id
+                        == subscription.organization_id,
+                        SubscriptionModel.id == subscription.id,
+                    )
+                    .with_for_update()
+                )
+                if model is None:
+                    raise EntitlementNotFoundError("Subscription was not found")
+                # Re-check the locked status so a transition computed from a
+                # stale read cannot overwrite a concurrent lifecycle change.
+                if model.status != expected_status.value:
+                    raise EntitlementConflictError(
+                        "Subscription changed during the transition"
+                    )
                 model.plan_id = subscription.plan_id
                 model.status = subscription.status.value
                 model.starts_at = subscription.starts_at

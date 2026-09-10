@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from decimal import InvalidOperation
 from enum import StrEnum
 from uuid import UUID
 
@@ -385,6 +386,38 @@ def transcript_record(grade: FinalGrade) -> TranscriptRecord:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ExternalGradeEvidence:
+    """Describe pending external evidence offered to official grading policy."""
+
+    evidence_id: UUID
+    external_event_id: str
+    course_offering_id: UUID
+    student_person_id: UUID
+    grade_value: str
+    observed_at: datetime
+    source_version: str
+
+    def __post_init__(self) -> None:
+        """Require a non-empty external value and an aware observation time."""
+
+        if not self.grade_value.strip():
+            raise GradingRuleError("External grade value is required.")
+        _require_aware(self.observed_at, "External evidence observation time")
+
+
+def parse_external_score(value: str) -> Decimal:
+    """Translate an external grade value into a finite official raw score."""
+
+    try:
+        score = Decimal(value.strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise GradingRuleError("External grade value is not a numeric score.") from exc
+    if not score.is_finite():
+        raise GradingRuleError("External grade value is not a finite score.")
+    return score
+
+
 def _require_aware(
     value: datetime,
     label: str,
@@ -396,6 +429,7 @@ def _require_aware(
 
 
 __all__ = [
+    "ExternalGradeEvidence",
     "FinalGrade",
     "FinalGradeHistory",
     "GpaSummary",
@@ -409,5 +443,6 @@ __all__ = [
     "TranscriptRecord",
     "build_scale_from_template",
     "calculate_gpa_summary",
+    "parse_external_score",
     "transcript_record",
 ]

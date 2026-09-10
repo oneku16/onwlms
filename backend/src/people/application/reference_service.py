@@ -37,5 +37,18 @@ class PeopleReferenceService:
             student_profile_ids=student_profile_ids,
         )
 
+    async def resolve_student_profile_id(
+        self,
+        *,
+        organization_id: UUID,
+        person_id: UUID,
+    ) -> UUID | None:
+        """Return one tenant person's student profile ID, or None when absent."""
+
+        return await self._repository.resolve_student_profile_id(
+            organization_id=organization_id,
+            person_id=person_id,
+        )
+
 
 __all__ = ["PeopleReferenceService"]

@@ -129,6 +129,23 @@ class FakePeopleRepository:
             and profile.id in student_profile_ids
         )
 
+    async def resolve_student_profile_id(
+        self,
+        *,
+        organization_id: UUID,
+        person_id: UUID,
+    ) -> UUID | None:
+        return next(
+            (
+                profile.id
+                for profile in self.profiles.values()
+                if profile.organization_id == organization_id
+                and profile.person_id == person_id
+                and profile.kind is ProfileKind.STUDENT
+            ),
+            None,
+        )
+
     async def get_profile(
         self,
         *,
@@ -542,6 +559,8 @@ def test_tenant_administrators_receive_exact_service_permissions() -> None:
         "scheduling.read",
         "integrations.configure",
         "integrations.read",
+        "integrations.grade_evidence.read",
+        "integrations.grade_evidence.reconcile",
         "provisioning.read",
         "provisioning.retry",
         "notifications.read_own",

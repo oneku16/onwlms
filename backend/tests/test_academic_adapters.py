@@ -21,6 +21,7 @@ from admissions.application.ports import AdmissionsTargetDirectory
 from grading.application.ports import GradeTargetDirectory
 from grading.application.ports import TermClosureDirectory
 from grading.domain.models import GradeTarget
+from people.application.reference_service import PeopleReferenceService
 from scheduling.application.availability_service import TeacherAvailabilityService
 from scheduling.application.ports import SchedulingResourceDirectory
 from scheduling.domain.constraints import detect_hard_conflicts
@@ -41,6 +42,7 @@ class _AcademicReferenceRepository:
     rooms: tuple[Room, ...]
     events: tuple[AcademicCalendarEvent, ...]
     cohort_ids: frozenset[UUID]
+    student_profile_id: UUID | None = None
 
     async def admissions_target_exists(
         self,
@@ -89,6 +91,35 @@ class _AcademicReferenceRepository:
         ):
             return None
         return self.grade_target
+
+    async def get_grade_target_for_participant(
+        self,
+        *,
+        organization_id: UUID,
+        course_offering_id: UUID,
+        student_profile_id: UUID,
+    ) -> AcademicGradeTarget | None:
+        """Return the configured grade facts only for the exact participation."""
+
+        if (
+            organization_id != self.organization_id
+            or course_offering_id != self.grade_target.course_offering_id
+            or student_profile_id != self.student_profile_id
+        ):
+            return None
+        return self.grade_target
+
+    async def list_course_offering_ids_for_term(
+        self,
+        *,
+        organization_id: UUID,
+        term_id: UUID,
+    ) -> frozenset[UUID] | None:
+        """Return the configured offering only for the exact tenant term."""
+
+        if organization_id != self.organization_id or term_id != self.term_id:
+            return None
+        return frozenset({self.grade_target.course_offering_id})
 
     async def get_term_closure(
         self,
@@ -216,11 +247,68 @@ def _repository() -> _AcademicReferenceRepository:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _PeopleReferenceRepository:
+    """Resolve one configured student profile for one tenant person."""
+
+    organization_id: UUID
+    person_id: UUID
+    student_profile_id: UUID
+
+    async def existing_teacher_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        teacher_profile_ids: frozenset[UUID],
+    ) -> frozenset[UUID]:
+        del organization_id, teacher_profile_ids
+        return frozenset()
+
+    async def existing_student_profile_ids(
+        self,
+        *,
+        organization_id: UUID,
+        student_profile_ids: frozenset[UUID],
+    ) -> frozenset[UUID]:
+        if organization_id != self.organization_id:
+            return frozenset()
+        return frozenset({self.student_profile_id}) & student_profile_ids
+
+    async def resolve_student_profile_id(
+        self,
+        *,
+        organization_id: UUID,
+        person_id: UUID,
+    ) -> UUID | None:
+        if organization_id != self.organization_id or person_id != self.person_id:
+            return None
+        return self.student_profile_id
+
+
+def _people_references(
+    repository: _AcademicReferenceRepository,
+    *,
+    person_id: UUID,
+) -> PeopleReferenceService:
+    """Bind the configured academic student profile to one tenant person."""
+
+    return PeopleReferenceService(
+        _PeopleReferenceRepository(
+            organization_id=repository.organization_id,
+            person_id=person_id,
+            student_profile_id=repository.student_profile_id or uuid4(),
+        )
+    )
+
+
 async def test_admissions_and_grading_adapters_translate_consumer_contracts() -> None:
     repository = _repository()
     references = AcademicReferenceService(repository=repository)
     admissions: AdmissionsTargetDirectory = AdmissionsAcademicTargetAdapter(references)
-    grade_targets: GradeTargetDirectory = AcademicGradeTargetAdapter(references)
+    grade_targets: GradeTargetDirectory = AcademicGradeTargetAdapter(
+        references,
+        people=_people_references(repository, person_id=uuid4()),
+    )
     terms: TermClosureDirectory = AcademicTermClosureAdapter(references)
 
     assert await admissions.target_exists(
@@ -344,3 +432,47 @@ async def test_scheduling_adapter_loads_authoritative_teacher_availability() -> 
     )
     assert existing.group_ids == repository.cohort_ids
     assert existing.teacher_ids == frozenset({known_teacher_id})
+
+
+async def test_grade_target_adapter_resolves_participation_through_people() -> None:
+    student_profile_id = uuid4()
+    person_id = uuid4()
+    base = _repository()
+    repository = _AcademicReferenceRepository(
+        organization_id=base.organization_id,
+        program_id=base.program_id,
+        term_id=base.term_id,
+        grade_target=base.grade_target,
+        term_closed=base.term_closed,
+        rooms=base.rooms,
+        events=base.events,
+        cohort_ids=base.cohort_ids,
+        student_profile_id=student_profile_id,
+    )
+    references = AcademicReferenceService(repository=repository)
+    grade_targets: GradeTargetDirectory = AcademicGradeTargetAdapter(
+        references,
+        people=_people_references(repository, person_id=person_id),
+    )
+
+    resolved = await grade_targets.get_grade_target_for_participant(
+        organization_id=repository.organization_id,
+        course_offering_id=repository.grade_target.course_offering_id,
+        student_person_id=person_id,
+    )
+    unknown_person = await grade_targets.get_grade_target_for_participant(
+        organization_id=repository.organization_id,
+        course_offering_id=repository.grade_target.course_offering_id,
+        student_person_id=uuid4(),
+    )
+    other_tenant = await grade_targets.get_grade_target_for_participant(
+        organization_id=uuid4(),
+        course_offering_id=repository.grade_target.course_offering_id,
+        student_person_id=person_id,
+    )
+
+    assert resolved is not None
+    assert resolved.course_enrollment_id == repository.grade_target.course_enrollment_id
+    assert resolved.course_offering_id == repository.grade_target.course_offering_id
+    assert unknown_person is None
+    assert other_tenant is None

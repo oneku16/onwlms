@@ -14,6 +14,8 @@ from academics.application.ports import CourseSelectionEnrollmentReader
 from academics.application.ports import CourseSelectionEvaluationCatalog
 from academics.application.ports import CourseSelectionRepository
 from academics.application.ports import CourseSelectionStudentOwnership
+from academics.application.ports import EnrollmentTransitionAuditSink
+from academics.application.ports import EnrollmentTransitionTargetType
 from academics.application.ports import TermClosureAuditSink
 from academics.application.read_models import CourseSelectionEnrollmentOption
 from academics.application.read_models import CourseSelectionOfferingOption
@@ -22,6 +24,7 @@ from academics.application.read_models import StudentCourseSelectionContext
 from academics.domain.exceptions import AcademicRuleError
 from academics.domain.exceptions import CourseSelectionDecisionError
 from academics.domain.exceptions import CourseSelectionError
+from academics.domain.exceptions import EnrollmentTransitionError
 from academics.domain.models import AcademicCalendarEvent
 from academics.domain.models import AcademicEnrollmentStatus
 from academics.domain.models import AcademicYear
@@ -62,6 +65,7 @@ ACADEMICS_SELECTION_OVERRIDE = "academics.course_selection.override"
 MAX_ACADEMIC_ADMIN_PAGE_SIZE = 100
 MAX_ACADEMIC_CALENDAR_HORIZON = timedelta(days=366)
 MAX_TERM_CLOSURE_EXPLANATION_LENGTH = 500
+MAX_ENROLLMENT_TRANSITION_EXPLANATION_LENGTH = 2000
 MAX_STUDENT_SELECTION_ENROLLMENTS = 10
 MAX_STUDENT_SELECTION_TERMS = 20
 MAX_STUDENT_SELECTION_OFFERINGS = 100
@@ -664,6 +668,29 @@ class AcademicAdministrationService:
             offset=offset,
         )
 
+    async def list_course_enrollments(
+        self,
+        *,
+        context: TenantActorContext,
+        student_academic_enrollment_id: UUID | None,
+        course_offering_id: UUID | None,
+        status: CourseEnrollmentStatus | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[CourseEnrollment, ...]:
+        """Return an authorized bounded page of official course enrollments."""
+
+        _authorize(context, ACADEMICS_ENROLLMENT_MANAGE)
+        _validate_page(limit=limit, offset=offset)
+        return await self._catalog.list_course_enrollments_page(
+            organization_id=context.organization_id,
+            student_academic_enrollment_id=student_academic_enrollment_id,
+            course_offering_id=course_offering_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
     async def get_curriculum(
         self,
         *,
@@ -701,6 +728,304 @@ class AcademicAdministrationService:
         if policy is None:
             raise NotFoundError("Course-selection policy was not found.")
         return policy
+
+
+class AcademicEnrollmentTransitionService:
+    """Apply audited one-way academic and course enrollment transitions.
+
+    Audit and catalog persistence are separate boundaries. Intent is recorded
+    before the row lock, so no transition happens without prior intent evidence,
+    and the domain rule is re-applied to the locked current state so a stale
+    concurrent request can neither repeat nor bypass a transition.
+    """
+
+    def __init__(
+        self,
+        *,
+        catalog: AcademicCatalogRepository,
+        audit: EnrollmentTransitionAuditSink,
+    ) -> None:
+        self._catalog = catalog
+        self._audit = audit
+
+    async def withdraw_student_enrollment(
+        self,
+        *,
+        context: TenantActorContext,
+        enrollment_id: UUID,
+        explanation: str,
+    ) -> StudentAcademicEnrollment:
+        """Withdraw one active academic enrollment and its enrolled courses together."""
+
+        reason = _authorize_enrollment_transition(
+            context=context,
+            explanation=explanation,
+        )
+        enrollment = await self._require_student_enrollment(
+            context=context,
+            enrollment_id=enrollment_id,
+        )
+        # Fail fast on the visible state so impossible requests leave no intent
+        # evidence; the locked re-read below remains the authoritative check.
+        enrollment.withdraw()
+        await self._record(
+            action="academics.enrollment.withdrawal_requested",
+            context=context,
+            target_type="academic_enrollment",
+            target_id=enrollment.id,
+            outcome="intent_recorded",
+            reason=reason,
+        )
+        async with self._catalog.student_enrollment_transition(
+            organization_id=context.organization_id,
+            enrollment_id=enrollment.id,
+        ) as transaction:
+            withdrawn = transaction.student_enrollment.withdraw()
+            course_enrollments = await transaction.list_course_enrollments()
+            cascaded = tuple(
+                course_enrollment.withdraw()
+                for course_enrollment in course_enrollments
+                if course_enrollment.status is CourseEnrollmentStatus.ENROLLED
+            )
+            await transaction.save_transition(
+                enrollment=withdrawn,
+                course_enrollments=cascaded,
+            )
+        await self._record(
+            action="academics.enrollment.withdrawn",
+            context=context,
+            target_type="academic_enrollment",
+            target_id=withdrawn.id,
+            outcome="succeeded",
+            reason=reason,
+        )
+        return withdrawn
+
+    async def complete_student_enrollment(
+        self,
+        *,
+        context: TenantActorContext,
+        enrollment_id: UUID,
+        explanation: str,
+    ) -> StudentAcademicEnrollment:
+        """Complete one active academic enrollment once no course remains enrolled."""
+
+        reason = _authorize_enrollment_transition(
+            context=context,
+            explanation=explanation,
+        )
+        enrollment = await self._require_student_enrollment(
+            context=context,
+            enrollment_id=enrollment_id,
+        )
+        enrollment.complete()
+        still_enrolled = await self._catalog.list_course_enrollments_page(
+            organization_id=context.organization_id,
+            student_academic_enrollment_id=enrollment.id,
+            course_offering_id=None,
+            status=CourseEnrollmentStatus.ENROLLED,
+            limit=1,
+            offset=0,
+        )
+        _require_course_participation_settled(still_enrolled)
+        await self._record(
+            action="academics.enrollment.completion_requested",
+            context=context,
+            target_type="academic_enrollment",
+            target_id=enrollment.id,
+            outcome="intent_recorded",
+            reason=reason,
+        )
+        async with self._catalog.student_enrollment_transition(
+            organization_id=context.organization_id,
+            enrollment_id=enrollment.id,
+        ) as transaction:
+            completed = transaction.student_enrollment.complete()
+            _require_course_participation_settled(
+                await transaction.list_course_enrollments()
+            )
+            await transaction.save_transition(
+                enrollment=completed,
+                course_enrollments=(),
+            )
+        await self._record(
+            action="academics.enrollment.completed",
+            context=context,
+            target_type="academic_enrollment",
+            target_id=completed.id,
+            outcome="succeeded",
+            reason=reason,
+        )
+        return completed
+
+    async def withdraw_course_enrollment(
+        self,
+        *,
+        context: TenantActorContext,
+        course_enrollment_id: UUID,
+        explanation: str,
+    ) -> CourseEnrollment:
+        """Withdraw one enrolled course enrollment while its term remains open."""
+
+        reason = _authorize_enrollment_transition(
+            context=context,
+            explanation=explanation,
+        )
+        course_enrollment = await self._require_course_enrollment(
+            context=context,
+            course_enrollment_id=course_enrollment_id,
+        )
+        course_enrollment.withdraw()
+        term = await self._require_offering_term(
+            context=context,
+            offering_id=course_enrollment.course_offering_id,
+        )
+        _require_open_term_for_withdrawal(term)
+        await self._record(
+            action="academics.course_enrollment.withdrawal_requested",
+            context=context,
+            target_type="course_enrollment",
+            target_id=course_enrollment.id,
+            outcome="intent_recorded",
+            reason=reason,
+        )
+        async with self._catalog.course_enrollment_transition(
+            organization_id=context.organization_id,
+            course_enrollment_id=course_enrollment.id,
+        ) as transaction:
+            _require_open_term_for_withdrawal(transaction.term)
+            withdrawn = transaction.course_enrollment.withdraw()
+            await transaction.save_transition(course_enrollment=withdrawn)
+        await self._record(
+            action="academics.course_enrollment.withdrawn",
+            context=context,
+            target_type="course_enrollment",
+            target_id=withdrawn.id,
+            outcome="succeeded",
+            reason=reason,
+        )
+        return withdrawn
+
+    async def complete_course_enrollment(
+        self,
+        *,
+        context: TenantActorContext,
+        course_enrollment_id: UUID,
+        explanation: str,
+    ) -> CourseEnrollment:
+        """Complete one enrolled course enrollment; finalization survives closure."""
+
+        reason = _authorize_enrollment_transition(
+            context=context,
+            explanation=explanation,
+        )
+        course_enrollment = await self._require_course_enrollment(
+            context=context,
+            course_enrollment_id=course_enrollment_id,
+        )
+        course_enrollment.complete()
+        await self._record(
+            action="academics.course_enrollment.completion_requested",
+            context=context,
+            target_type="course_enrollment",
+            target_id=course_enrollment.id,
+            outcome="intent_recorded",
+            reason=reason,
+        )
+        async with self._catalog.course_enrollment_transition(
+            organization_id=context.organization_id,
+            course_enrollment_id=course_enrollment.id,
+        ) as transaction:
+            completed = transaction.course_enrollment.complete()
+            await transaction.save_transition(course_enrollment=completed)
+        await self._record(
+            action="academics.course_enrollment.completed",
+            context=context,
+            target_type="course_enrollment",
+            target_id=completed.id,
+            outcome="succeeded",
+            reason=reason,
+        )
+        return completed
+
+    async def _require_student_enrollment(
+        self,
+        *,
+        context: TenantActorContext,
+        enrollment_id: UUID,
+    ) -> StudentAcademicEnrollment:
+        """Resolve one academic enrollment without revealing other tenants."""
+
+        enrollment = await self._catalog.get_student_enrollment(
+            organization_id=context.organization_id,
+            enrollment_id=enrollment_id,
+        )
+        if enrollment is None:
+            raise NotFoundError("Student academic enrollment was not found.")
+        return enrollment
+
+    async def _require_course_enrollment(
+        self,
+        *,
+        context: TenantActorContext,
+        course_enrollment_id: UUID,
+    ) -> CourseEnrollment:
+        """Resolve one course enrollment without revealing other tenants."""
+
+        course_enrollment = await self._catalog.get_course_enrollment(
+            organization_id=context.organization_id,
+            course_enrollment_id=course_enrollment_id,
+        )
+        if course_enrollment is None:
+            raise NotFoundError("Course enrollment was not found.")
+        return course_enrollment
+
+    async def _require_offering_term(
+        self,
+        *,
+        context: TenantActorContext,
+        offering_id: UUID,
+    ) -> Term:
+        """Resolve the term that governs one course offering."""
+
+        offering = await self._catalog.get_course_offering(
+            organization_id=context.organization_id,
+            offering_id=offering_id,
+        )
+        term = (
+            None
+            if offering is None
+            else await self._catalog.get_term(
+                organization_id=context.organization_id,
+                term_id=offering.term_id,
+            )
+        )
+        if term is None:
+            raise NotFoundError("Course enrollment term was not found.")
+        return term
+
+    async def _record(
+        self,
+        *,
+        action: str,
+        context: TenantActorContext,
+        target_type: EnrollmentTransitionTargetType,
+        target_id: UUID,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        """Append minimized transition evidence bound to the trusted actor."""
+
+        await self._audit.record_enrollment_transition_event(
+            action=action,
+            organization_id=context.organization_id,
+            actor_subject_id=context.subject_id,
+            target_type=target_type,
+            target_id=target_id,
+            correlation_id=context.correlation_id,
+            outcome=outcome,
+            reason=reason,
+        )
 
 
 class CourseSelectionService:
@@ -1414,6 +1739,49 @@ def _authorize(
         raise AuthorizationError("Required academic permission is missing.")
 
 
+def _authorize_enrollment_transition(
+    *,
+    context: TenantActorContext,
+    explanation: str,
+) -> str:
+    """Authorize the actor and return the normalized required explanation."""
+
+    _authorize(context, ACADEMICS_ENROLLMENT_MANAGE)
+    normalized = explanation.strip()
+    if not normalized:
+        raise AcademicRuleError("An enrollment transition explanation is required.")
+    if len(normalized) > MAX_ENROLLMENT_TRANSITION_EXPLANATION_LENGTH:
+        raise AcademicRuleError(
+            "Enrollment transition explanation cannot exceed "
+            f"{MAX_ENROLLMENT_TRANSITION_EXPLANATION_LENGTH} characters."
+        )
+    return normalized
+
+
+def _require_course_participation_settled(
+    course_enrollments: tuple[CourseEnrollment, ...],
+) -> None:
+    """Block academic completion while any course participation is enrolled."""
+
+    if any(
+        course_enrollment.status is CourseEnrollmentStatus.ENROLLED
+        for course_enrollment in course_enrollments
+    ):
+        raise EnrollmentTransitionError(
+            "Academic enrollment cannot be completed while course enrollments "
+            "remain enrolled."
+        )
+
+
+def _require_open_term_for_withdrawal(term: Term) -> None:
+    """Reject course withdrawal once the offering term has been closed."""
+
+    if term.is_closed:
+        raise EnrollmentTransitionError(
+            "Course enrollment cannot be withdrawn after term closure."
+        )
+
+
 def _validate_page(*, limit: int, offset: int) -> None:
     """Require a bounded non-negative administrative page."""
 
@@ -1457,7 +1825,9 @@ __all__ = [
     "ACADEMICS_TERM_CLOSE",
     "MAX_ACADEMIC_ADMIN_PAGE_SIZE",
     "MAX_ACADEMIC_CALENDAR_HORIZON",
+    "MAX_ENROLLMENT_TRANSITION_EXPLANATION_LENGTH",
     "MAX_TERM_CLOSURE_EXPLANATION_LENGTH",
     "AcademicAdministrationService",
+    "AcademicEnrollmentTransitionService",
     "CourseSelectionService",
 ]

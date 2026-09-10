@@ -2,6 +2,7 @@
 
 from grading.domain.exceptions import GradeRevisionConflictError
 from grading.domain.exceptions import GradingRuleError
+from grading.domain.models import ExternalGradeEvidence
 from grading.domain.models import FinalGrade
 from grading.domain.models import FinalGradeHistory
 from grading.domain.models import GpaSummary
@@ -15,9 +16,11 @@ from grading.domain.models import GradingScaleTemplate
 from grading.domain.models import TranscriptRecord
 from grading.domain.models import build_scale_from_template
 from grading.domain.models import calculate_gpa_summary
+from grading.domain.models import parse_external_score
 from grading.domain.models import transcript_record
 
 __all__ = [
+    "ExternalGradeEvidence",
     "FinalGrade",
     "FinalGradeHistory",
     "GpaSummary",
@@ -33,5 +36,6 @@ __all__ = [
     "TranscriptRecord",
     "build_scale_from_template",
     "calculate_gpa_summary",
+    "parse_external_score",
     "transcript_record",
 ]

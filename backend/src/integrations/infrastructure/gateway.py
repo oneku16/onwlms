@@ -6,7 +6,10 @@ from datetime import datetime
 import httpx
 
 from core.errors import ExternalServiceError
+from integrations.domain.moodle import MoodleCourseGradeObservation
 from integrations.domain.moodle import MoodleDeadlineEvidence
+
+MOODLE_SOURCE_VERSION = "moodle-webservice-v1"
 
 
 class MoodleWebServiceGateway:
@@ -193,12 +196,64 @@ class MoodleWebServiceGateway:
                         title=name,
                         due_at=datetime.fromtimestamp(timestamp, UTC),
                         observed_at=observed_at,
-                        source_version="moodle-webservice-v1",
+                        source_version=MOODLE_SOURCE_VERSION,
                     )
                 )
         return sorted(
             results,
             key=lambda value: (value.due_at, value.external_reference),
+        )
+
+    async def list_course_grades(
+        self,
+        *,
+        external_course_id: str,
+    ) -> list[MoodleCourseGradeObservation]:
+        """Translate graded course totals for every learner in one course shell."""
+
+        payload = await self._call(
+            function="gradereport_user_get_grade_items",
+            parameters={"courseid": external_course_id},
+        )
+        if not isinstance(payload, dict):
+            return []
+        user_grades = payload.get("usergrades")
+        if not isinstance(user_grades, list):
+            return []
+        observed_at = datetime.now(UTC)
+        results: list[MoodleCourseGradeObservation] = []
+        for user_grade in user_grades:
+            if not isinstance(user_grade, dict):
+                continue
+            user_id = user_grade.get("userid")
+            items = user_grade.get("gradeitems")
+            if not isinstance(user_id, int) or not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict) or item.get("itemtype") != "course":
+                    continue
+                item_id = item.get("id")
+                raw_grade = item.get("graderaw")
+                if not isinstance(item_id, int) or not _is_number(raw_grade):
+                    continue
+                graded = item.get("gradedategraded")
+                results.append(
+                    MoodleCourseGradeObservation(
+                        external_user_id=str(user_id),
+                        grade_item_id=str(item_id),
+                        grade_raw=str(raw_grade),
+                        graded_at=(
+                            datetime.fromtimestamp(graded, UTC)
+                            if isinstance(graded, int) and not isinstance(graded, bool)
+                            else None
+                        ),
+                        observed_at=observed_at,
+                        source_version=MOODLE_SOURCE_VERSION,
+                    )
+                )
+        return sorted(
+            results,
+            key=lambda value: (value.external_user_id, value.grade_item_id),
         )
 
     async def _call(
@@ -217,6 +272,7 @@ class MoodleWebServiceGateway:
             "core_user_get_users_by_field",
             "enrol_manual_enrol_users",
             "enrol_manual_unenrol_users",
+            "gradereport_user_get_grade_items",
             "mod_assign_get_assignments",
         }
         if function not in allowed:
@@ -248,4 +304,10 @@ class MoodleWebServiceGateway:
         return payload
 
 
-__all__ = ["MoodleWebServiceGateway"]
+def _is_number(value: object) -> bool:
+    """Return whether a Moodle grade value is a real numeric grade."""
+
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+__all__ = ["MOODLE_SOURCE_VERSION", "MoodleWebServiceGateway"]
